@@ -17,7 +17,7 @@ class Report(IdMixin, TimestampMixin, Base):
 
     __tablename__ = "reports"
 
-    status: Mapped[str] = mapped_column(
+    status: Mapped[ReportStatus] = mapped_column(
         enum_value_type(ReportStatus, name="report_status"),
         index=True,
         default=ReportStatus.PENDING,

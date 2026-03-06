@@ -13,8 +13,8 @@ from src.db.session import SessionLocal
 from src.jobs.service import submit_job
 from src.outbox import repository as repo
 from src.outbox.enums import OutboxStatus
-from src.outbox.models import OutboxEvent
 from src.outbox.events import JOB_DISPATCH_REQUESTED
+from src.outbox.models import OutboxEvent
 from src.outbox.service import MAX_PUBLISH_RETRIES, publish_pending_events
 from src.tests.utils import generate_idempotency_key
 
