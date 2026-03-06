@@ -93,7 +93,7 @@ def create_attempt(
     attempt = JobAttempt(
         job_id=job_id,
         attempt_no=attempt_no,
-        status=status.value,
+        status=status,
         error=error,
         started_at=started_at or datetime.now(UTC),
     )
@@ -110,7 +110,7 @@ def update_attempt(
 ) -> JobAttempt:
     """Update fields of an existing attempt record."""
     if status is not None:
-        attempt.status = status.value
+        attempt.status = status
     if error is not None:
         attempt.error = error
     if finished_at is not None:
