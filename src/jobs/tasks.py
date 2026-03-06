@@ -7,10 +7,7 @@ publishing outbox dispatch events.
 
 from __future__ import annotations
 
-from importlib import import_module
-
 from src.config.celery import celery
-from src.config.settings import settings
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
 from src.core.utils import now_utc
@@ -23,33 +20,34 @@ from .exceptions import ExecutorNotRegistered, NonRetryableJobError, RetryableJo
 from .messages import DEFAULT_RETRY_ERROR_MESSAGE, dlq_max_retries_error
 from .registry import get_executor
 from .types import ExecutionResult, JobContext
-from .utils import is_eager, retry_countdown
+from .utils import is_eager, load_executors, retry_countdown, task_log
+
+load_executors()
 
 
-def _load_executors() -> None:
+def _classify_execution_error(
+    exc: Exception,
+    *,
+    current_retries: int,
+    max_retries: int,
+) -> tuple[JobStatus, JobEvent, LogLevel, str, bool]:
     """
-    Import executor modules so their decorators register handlers.
-    """
-
-    for module_path in settings.job_executors:
-        import_module(module_path)
-
-
-_load_executors()
-
-
-def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
-    """
-    Emit structured job pipeline logs through the task logger.
+    Classify a job execution error into a retry or DLQ outcome.
     """
 
-    logger = getattr(task, "logger", None)
-    if not logger:
-        return
-    msg = f"[jobs] {event.value} " + " ".join(
-        f"{k}={v}" for k, v in fields.items() if v is not None
-    )
-    getattr(logger, level.value, logger.info)(msg)
+    error = str(exc)
+
+    if isinstance(exc, (ExecutorNotRegistered, NonRetryableJobError)):
+        return JobStatus.DEAD, JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error, False
+
+    if isinstance(exc, RetryableJobError):
+        if current_retries >= max_retries:
+            error = dlq_max_retries_error(error)
+            return JobStatus.DEAD, JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error, False
+
+        return JobStatus.PENDING, JobEvent.RETRY_NEEDED, LogLevel.WARNING, error, True
+
+    raise exc
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=2)
@@ -68,11 +66,12 @@ def process_job(self, job_id: str) -> None:
     request_id = headers.get(REQUEST_ID_HEADER)
 
     with SessionLocal() as db:
-        _task_log(
+        task_log(
             self,
             LogLevel.INFO,
             JobEvent.ATTEMPT_BEGIN,
             job_id=job_id,
+            request_id=request_id,
             retries=current_retries,
         )
 
@@ -99,7 +98,10 @@ def process_job(self, job_id: str) -> None:
                 attempt_no = begin.attempt_no
 
                 ctx = JobContext(
-                    db=db, job_id=job_id, attempt_no=attempt_no, request_id=request_id
+                    db=db,
+                    job_id=job_id,
+                    attempt_no=attempt_no,
+                    request_id=request_id,
                 )
 
                 attempt_status: AttemptStatus = AttemptStatus.FAILED
@@ -117,34 +119,25 @@ def process_job(self, job_id: str) -> None:
                     attempt_status = AttemptStatus.SUCCEEDED
                     job_status = JobStatus.COMPLETED
 
-                except ExecutorNotRegistered as e:
-                    error = str(e)
-                    event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
-
-                except NonRetryableJobError as e:
-                    error = str(e)
-                    event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
-
-                except RetryableJobError as e:
-                    error = str(e)
-                    job_status = JobStatus.PENDING
-
-                    if current_retries >= max_retries:
-                        error = dlq_max_retries_error(error)
-                        job_status = JobStatus.DEAD
-                        event, level, detail = (
-                            JobEvent.MOVED_TO_DLQ,
-                            LogLevel.ERROR,
-                            error,
-                        )
-                    else:
-                        need_retry = True
+                except (
+                    ExecutorNotRegistered,
+                    NonRetryableJobError,
+                    RetryableJobError,
+                ) as exc:
+                    (
+                        job_status,
+                        event,
+                        level,
+                        error,
+                        need_retry,
+                    ) = _classify_execution_error(
+                        exc,
+                        current_retries=current_retries,
+                        max_retries=max_retries,
+                    )
+                    detail = error
+                    if need_retry:
                         retry_reason = error
-                        event, level, detail = (
-                            JobEvent.RETRY_NEEDED,
-                            LogLevel.WARNING,
-                            error,
-                        )
 
                 finally:
                     finished_at = now_utc()
@@ -159,26 +152,33 @@ def process_job(self, job_id: str) -> None:
                         result=result,
                     )
 
-        _task_log(
-            self, level, event, job_id=job_id, attempt_no=attempt_no, detail=detail
+        task_log(
+            self,
+            level,
+            event,
+            job_id=job_id,
+            attempt_no=attempt_no,
+            request_id=request_id,
+            detail=detail,
         )
 
         if not need_retry:
             return
 
         if is_eager(celery_app=celery):
-            _task_log(
+            task_log(
                 self,
                 LogLevel.WARNING,
                 JobEvent.RETRY_EAGER_SIMULATED,
                 job_id=job_id,
                 attempt_no=attempt_no,
+                request_id=request_id,
                 detail=retry_reason,
             )
             return self.apply(args=(job_id,), throw=True, retries=current_retries + 1)
 
         countdown = retry_countdown(current_retries)
-        _task_log(
+        task_log(
             self,
             LogLevel.WARNING,
             JobEvent.RETRY_SCHEDULED,
@@ -186,6 +186,7 @@ def process_job(self, job_id: str) -> None:
             attempt_no=attempt_no,
             retries=current_retries,
             countdown=countdown,
+            request_id=request_id,
             detail=retry_reason,
         )
         raise self.retry(
@@ -199,6 +200,7 @@ def publish_job_dispatch_events() -> int:
     """
     Publish pending job dispatch events from the outbox.
     """
+
     from . import publish
 
     return publish.publish_outbox_job_dispatch_events()
