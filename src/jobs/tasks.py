@@ -7,14 +7,16 @@ from src.config.celery import celery
 from src.config.settings import settings
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
+from src.core.utils import now_utc
 from src.db.session import SessionLocal
+from src.db.utils import tx
 
 from . import pipeline
 from .enums import AttemptStatus, JobEvent, JobStatus
 from .exceptions import ExecutorNotRegistered, NonRetryableJobError, RetryableJobError
 from .registry import get_executor
 from .types import ExecutionResult, JobContext
-from .utils import is_eager, now_utc, retry_countdown, tx
+from .utils import is_eager, retry_countdown
 
 
 def _load_executors() -> None:

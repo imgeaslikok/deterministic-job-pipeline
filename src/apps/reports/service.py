@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from src.jobs.utils import tx
+from src.db.utils import tx
 
 from . import repository as repo
 from .enums import ReportStatus

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column
 
-
-def now_utc() -> datetime:
-    return datetime.now(UTC)
+from src.core.utils import now_utc
 
 
 class IdMixin:
