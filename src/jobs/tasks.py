@@ -16,7 +16,6 @@ from src.core.enums import LogLevel
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
 from src.db.utils import tx
-from src.outbox import service as outbox_service
 
 from . import pipeline
 from .enums import AttemptStatus, JobEvent, JobStatus
@@ -200,11 +199,6 @@ def publish_job_dispatch_events() -> int:
     """
     Publish pending job dispatch events from the outbox.
     """
+    from . import publish
 
-    from .dispatch import dispatch_job
-
-    with SessionLocal() as db:
-        return outbox_service.publish_pending_events(
-            db,
-            dispatch_job=dispatch_job,
-        )
+    return publish.publish_outbox_job_dispatch_events()
