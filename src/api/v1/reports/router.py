@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.apps.reports import service as reports_service
+from src.core.context import REQUEST_ID_HEADER
 from src.db.session import get_db
 
 from .schemas import ReportCreateRequest, ReportResponse
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 def create_report(
     req: ReportCreateRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
     db: Session = Depends(get_db),
 ) -> ReportResponse:
     """

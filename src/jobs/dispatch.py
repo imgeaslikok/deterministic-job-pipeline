@@ -6,8 +6,6 @@ Responsible for sending jobs to the background worker.
 
 from __future__ import annotations
 
-from typing import Protocol
-
 from src.config.settings import settings
 from src.core.context import REQUEST_ID_HEADER
 
