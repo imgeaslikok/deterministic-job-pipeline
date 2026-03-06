@@ -12,7 +12,7 @@ from .types import AttemptResult
 
 
 def _is_terminal(status: JobStatus) -> bool:
-    return status in (JobStatus.completed, JobStatus.dead)
+    return status in (JobStatus.COMPLETED, JobStatus.DEAD)
 
 
 def begin_attempt(db: Session, *, job_id: str, started_at: datetime) -> AttemptResult:
@@ -34,7 +34,7 @@ def begin_attempt(db: Session, *, job_id: str, started_at: datetime) -> AttemptR
 
     attempt_no = int(job.attempts or 0) + 1
 
-    job.status = JobStatus.running
+    job.status = JobStatus.RUNNING
     job.attempts = attempt_no
     job.last_error = None
     repo.save(db, job)
@@ -44,7 +44,7 @@ def begin_attempt(db: Session, *, job_id: str, started_at: datetime) -> AttemptR
             db,
             job_id=job.id,
             attempt_no=attempt_no,
-            status=AttemptStatus.running,
+            status=AttemptStatus.RUNNING,
             started_at=started_at,
         )
     except IntegrityError:
@@ -100,6 +100,6 @@ def move_to_dead(db: Session, *, job_id: str, error: str) -> None:
     job = repo.get_for_update(db, id=job_id)
     if not job or _is_terminal(job.status):
         return
-    job.status = JobStatus.dead
+    job.status = JobStatus.DEAD
     job.last_error = error
     repo.save(db, job)

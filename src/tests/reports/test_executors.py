@@ -22,11 +22,11 @@ def test_report_generation_flow_completes_job_and_report(
 
     job = get_job(report.job_id)
     assert job is not None
-    assert job.status == JobStatus.completed
+    assert job.status == JobStatus.COMPLETED
 
     report2 = get_report(report.id)
     assert report2 is not None
-    assert report2.status == ReportStatus.ready
+    assert report2.status == ReportStatus.READY
     assert report2.result is not None
 
 

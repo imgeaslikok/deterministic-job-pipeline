@@ -34,7 +34,7 @@ def test_success_path_creates_attempt_and_completes(db_session, get_job):
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.completed
+    assert job2.status == JobStatus.COMPLETED
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 1
@@ -64,7 +64,7 @@ def test_retryable_error_retries_and_eventually_completes(db_session, get_job):
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.completed
+    assert job2.status == JobStatus.COMPLETED
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 2
@@ -90,7 +90,7 @@ def test_non_retryable_error_moves_to_dlq(db_session, get_job):
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.dead
+    assert job2.status == JobStatus.DEAD
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 1
@@ -163,7 +163,7 @@ def test_missing_executor_moves_to_dlq_and_writes_attempt(db_session, get_job):
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.dead
+    assert job2.status == JobStatus.DEAD
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 1

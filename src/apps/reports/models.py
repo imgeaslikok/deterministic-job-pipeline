@@ -1,46 +1,26 @@
-import uuid
-from datetime import UTC, datetime
-
-from sqlalchemy import JSON, DateTime, Enum, String
+from sqlalchemy import JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base
+from src.db.mixins import IdMixin, TimestampMixin
+from src.db.types import enum_value_type
 
 from .enums import ReportStatus
 
 
-class Report(Base):
+class Report(IdMixin, TimestampMixin, Base):
     __tablename__ = "reports"
 
-    id: Mapped[str] = mapped_column(
-        String(36),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-    )
-
     status: Mapped[str] = mapped_column(
-        Enum(ReportStatus, name="report_status"),
+        enum_value_type(ReportStatus, name="report_status"),
         index=True,
-        default=ReportStatus.pending,
+        default=ReportStatus.PENDING,
     )
-
     job_id: Mapped[str | None] = mapped_column(
         String(36),
         nullable=True,
     )
-
     result: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
     )

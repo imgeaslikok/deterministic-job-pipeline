@@ -2,6 +2,6 @@ import enum
 
 
 class ReportStatus(str, enum.Enum):
-    pending = "pending"
-    ready = "ready"
-    failed = "failed"
+    PENDING = "pending"
+    READY = "ready"
+    FAILED = "failed"

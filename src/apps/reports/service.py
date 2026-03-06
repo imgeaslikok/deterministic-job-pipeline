@@ -18,7 +18,7 @@ from .models import Report
 def _create_report(db: Session) -> Report:
     """Create a report row only (does not enqueue jobs)."""
     with tx(db):
-        report = Report(status=ReportStatus.pending)
+        report = Report(status=ReportStatus.PENDING)
         repo.create(db, report=report)
         return report
 
@@ -75,10 +75,10 @@ def complete_report(db: Session, *, report_id: str, result: dict) -> Report:
         if report is None:
             raise ReportNotFound(report_id)
 
-        if report.status != ReportStatus.pending:
+        if report.status != ReportStatus.PENDING:
             raise InvalidReportState(report_id, status=report.status.value)
 
         report.result = result
-        report.status = ReportStatus.ready
+        report.status = ReportStatus.READY
         repo.save(db, report)
         return report

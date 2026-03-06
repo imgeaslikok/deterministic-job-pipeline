@@ -5,6 +5,8 @@ from typing import Optional
 
 from src.config.celery import celery
 from src.config.settings import settings
+from src.core.context import REQUEST_ID_HEADER
+from src.core.enums import LogLevel
 from src.db.session import SessionLocal
 
 from . import pipeline
@@ -47,14 +49,14 @@ def process_job(self, job_id: str) -> None:
 
     request_id: Optional[str]
     try:
-        request_id = getattr(self.request, "headers", {}).get("x_request_id")  # type: ignore[assignment]
+        request_id = getattr(self.request, "headers", {}).get(REQUEST_ID_HEADER)  # type: ignore[assignment]
     except Exception:
         request_id = None
 
     db = SessionLocal()
     try:
         _task_log(
-            self, "info", JobEvent.attempt_begin, job_id=job_id, retries=current_retries
+            self, "info", JobEvent.ATTEMPT_BEGIN, job_id=job_id, retries=current_retries
         )
 
         started_at = now_utc()
@@ -62,14 +64,18 @@ def process_job(self, job_id: str) -> None:
         need_retry = False
         retry_reason: str | None = None
         attempt_no: int | None = None
-        event: JobEvent = JobEvent.attempt_succeeded
-        level: str = "info"
+        event: JobEvent = JobEvent.ATTEMPT_SUCCEEDED
+        level: str = LogLevel.INFO
         detail: str | None = None
 
         with tx(db):
             begin = pipeline.begin_attempt(db, job_id=job_id, started_at=started_at)
             if not begin.should_run:
-                event, level, detail = JobEvent.attempt_noop, "info", begin.reason
+                event, level, detail = (
+                    JobEvent.ATTEMPT_NOOP,
+                    LogLevel.INFO,
+                    begin.reason,
+                )
             else:
                 assert begin.job is not None and begin.attempt_no is not None
                 job = begin.job
@@ -91,25 +97,25 @@ def process_job(self, job_id: str) -> None:
                     )
                     result = exec_result.result if exec_result else None
 
-                    attempt_status = AttemptStatus.succeeded
-                    job_status = JobStatus.completed
+                    attempt_status = AttemptStatus.SUCCEEDED
+                    job_status = JobStatus.COMPLETED
 
                 except ExecutorNotRegistered as e:
                     error = str(e)
-                    attempt_status = AttemptStatus.failed
-                    job_status = JobStatus.dead
-                    event, level, detail = JobEvent.moved_to_dlq, "error", error
+                    attempt_status = AttemptStatus.FAILED
+                    job_status = JobStatus.DEAD
+                    event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
 
                 except NonRetryableJobError as e:
                     error = str(e)
-                    attempt_status = AttemptStatus.failed
-                    job_status = JobStatus.dead
-                    event, level, detail = JobEvent.moved_to_dlq, "error", error
+                    attempt_status = AttemptStatus.FAILED
+                    job_status = JobStatus.DEAD
+                    event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
 
                 except RetryableJobError as e:
                     error = str(e)
-                    attempt_status = AttemptStatus.failed
-                    job_status = JobStatus.pending
+                    attempt_status = AttemptStatus.FAILED
+                    job_status = JobStatus.PENDING
 
                     if current_retries >= max_retries:
                         pipeline.move_to_dead(
@@ -117,12 +123,20 @@ def process_job(self, job_id: str) -> None:
                             job_id=job_id,
                             error=f"DLQ: {error} (max retries exceeded)",
                         )
-                        job_status = JobStatus.dead
-                        event, level, detail = JobEvent.moved_to_dlq, "error", error
+                        job_status = JobStatus.DEAD
+                        event, level, detail = (
+                            JobEvent.MOVED_TO_DLQ,
+                            LogLevel.ERROR,
+                            error,
+                        )
                     else:
                         need_retry = True
                         retry_reason = error
-                        event, level, detail = JobEvent.retry_needed, "warning", error
+                        event, level, detail = (
+                            JobEvent.RETRY_NEEDED,
+                            LogLevel.WARNING,
+                            error,
+                        )
 
                 finally:
                     finished_at = now_utc()
@@ -147,8 +161,8 @@ def process_job(self, job_id: str) -> None:
         if is_eager(celery_app=celery):
             _task_log(
                 self,
-                "warning",
-                JobEvent.retry_eager_simulated,
+                LogLevel.WARNING,
+                JobEvent.RETRY_EAGER_SIMULATED,
                 job_id=job_id,
                 attempt_no=attempt_no,
                 detail=retry_reason,
@@ -158,8 +172,8 @@ def process_job(self, job_id: str) -> None:
         countdown = retry_countdown(current_retries)
         _task_log(
             self,
-            "warning",
-            JobEvent.retry_scheduled,
+            LogLevel.WARNING,
+            JobEvent.RETRY_SCHEDULED,
             job_id=job_id,
             attempt_no=attempt_no,
             retries=current_retries,

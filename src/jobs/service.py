@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config.settings import settings
+from src.core.context import REQUEST_ID_HEADER
 
 from . import repository as repo
 from .enums import JobStatus
@@ -22,7 +23,7 @@ def _enqueue_job(*, job_id: str, request_id: str | None) -> None:
     if settings.environment == "test":
         return
 
-    headers = {"x_request_id": request_id} if request_id else None
+    headers = {REQUEST_ID_HEADER: request_id} if request_id else None
 
     process_job.apply_async(args=(job_id,), headers=headers)
 
@@ -59,10 +60,10 @@ def get_job(db: Session, *, id: str) -> Job:
 def retry_from_dlq(db: Session, *, job_id: str, request_id: str | None = None) -> Job:
     """Reset a dead job back to pending and enqueue it."""
     job = get_job(db, id=job_id)
-    if job.status != JobStatus.dead:
+    if job.status != JobStatus.DEAD:
         raise InvalidJobState(job_id=job.id, status=job.status.value)
 
-    job.status = JobStatus.pending
+    job.status = JobStatus.PENDING
     job.last_error = None
     job.result = None
     repo.save(db, job)

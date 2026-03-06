@@ -42,7 +42,7 @@ def create(
     job = Job(
         job_type=job_type,
         payload=payload,
-        status=JobStatus.pending,
+        status=JobStatus.PENDING,
         idempotency_key=idempotency_key,
     )
     job = save(db, job)
