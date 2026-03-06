@@ -27,7 +27,7 @@ class Job(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    type: Mapped[str] = mapped_column(String(64), index=True)
+    job_type: Mapped[str] = mapped_column(String(64), index=True)
 
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 

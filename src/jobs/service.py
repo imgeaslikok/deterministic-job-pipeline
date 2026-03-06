@@ -30,7 +30,7 @@ def _enqueue_job(*, job_id: str, request_id: str | None) -> None:
 def submit_job(
     db: Session,
     *,
-    type: str,
+    job_type: str,
     payload: dict,
     idempotency_key: str | None = None,
     request_id: str | None = None,
@@ -39,7 +39,7 @@ def submit_job(
     Create (or reuse) and enqueue processing.
     """
     job = _create_job_row(
-        db, type=type, payload=payload, idempotency_key=idempotency_key
+        db, job_type=job_type, payload=payload, idempotency_key=idempotency_key
     )
     db.commit()
 
@@ -82,7 +82,7 @@ def list_attempts(db: Session, *, job_id: str):
 def _create_job_row(
     db: Session,
     *,
-    type: str,
+    job_type: str,
     payload: dict,
     idempotency_key: str | None,
 ) -> Job:
@@ -90,20 +90,24 @@ def _create_job_row(
     if idempotency_key:
         existing = repo.get_by_idempotency_key(db, key=idempotency_key)
         if existing:
-            if existing.type != type or (existing.payload or {}) != (payload or {}):
+            if existing.job_type != job_type or (existing.payload or {}) != (
+                payload or {}
+            ):
                 raise IdempotencyKeyConflict(idempotency_key)
             return existing
 
     try:
         return repo.create(
-            db, type=type, payload=payload, idempotency_key=idempotency_key
+            db, job_type=job_type, payload=payload, idempotency_key=idempotency_key
         )
     except IntegrityError:
         db.rollback()
         if idempotency_key:
             existing = repo.get_by_idempotency_key(db, key=idempotency_key)
             if existing:
-                if existing.type != type or (existing.payload or {}) != (payload or {}):
+                if existing.job_type != job_type or (existing.payload or {}) != (
+                    payload or {}
+                ):
                     raise IdempotencyKeyConflict(idempotency_key)
                 return existing
         raise

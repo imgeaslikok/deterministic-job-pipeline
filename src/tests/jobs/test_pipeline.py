@@ -24,7 +24,7 @@ def test_success_path_creates_attempt_and_completes(db_session, get_job):
 
     job = submit_job(
         db_session,
-        type="demo.success",
+        job_type="demo.success",
         payload={"x": 1},
         idempotency_key=generate_idempotency_key("job-success"),
     )
@@ -54,7 +54,7 @@ def test_retryable_error_retries_and_eventually_completes(db_session, get_job):
 
     job = submit_job(
         db_session,
-        type="demo.retry",
+        job_type="demo.retry",
         payload={},
         idempotency_key=generate_idempotency_key("job-retry"),
     )
@@ -80,7 +80,7 @@ def test_non_retryable_error_moves_to_dlq(db_session, get_job):
 
     job = submit_job(
         db_session,
-        type="demo.dead",
+        job_type="demo.dead",
         payload={},
         idempotency_key=generate_idempotency_key("job-dead"),
     )
@@ -108,14 +108,14 @@ def test_idempotency_key_returns_existing_job_without_creating_new_one(db_sessio
 
     job1 = submit_job(
         db_session,
-        type="demo.idem",
+        job_type="demo.idem",
         payload={"a": 1},
         idempotency_key=key,
     )
 
     job2 = submit_job(
         db_session,
-        type="demo.idem",
+        job_type="demo.idem",
         payload={"a": 1},
         idempotency_key=key,
     )
@@ -134,7 +134,7 @@ def test_idempotency_key_conflict_raises(db_session):
 
     _ = submit_job(
         db_session,
-        type="demo.idem2",
+        job_type="demo.idem2",
         payload={"a": 1},
         idempotency_key=key,
     )
@@ -142,7 +142,7 @@ def test_idempotency_key_conflict_raises(db_session):
     with pytest.raises(IdempotencyKeyConflict):
         _ = submit_job(
             db_session,
-            type="demo.idem2",
+            job_type="demo.idem2",
             payload={"a": 2},
             idempotency_key=key,
         )
@@ -153,7 +153,7 @@ def test_missing_executor_moves_to_dlq_and_writes_attempt(db_session, get_job):
 
     job = submit_job(
         db_session,
-        type="demo.missing-executor",
+        job_type="demo.missing-executor",
         payload={},
         idempotency_key=generate_idempotency_key("job-missing-exec"),
     )

@@ -85,7 +85,7 @@ def process_job(self, job_id: str) -> None:
                 result: dict | None = None
 
                 try:
-                    executor = get_executor(job.type)
+                    executor = get_executor(job.job_type)
                     exec_result: ExecutionResult | None = executor(
                         ctx, job.payload or {}
                     )

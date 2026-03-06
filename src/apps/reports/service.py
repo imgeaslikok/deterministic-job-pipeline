@@ -59,7 +59,7 @@ def create_report_and_enqueue(
 
     job = jobs_service.submit_job(
         db=db,
-        type=REPORT_GENERATE,
+        job_type=REPORT_GENERATE,
         payload={"report_id": report.id},
         idempotency_key=idempotency_key,
         request_id=request_id,

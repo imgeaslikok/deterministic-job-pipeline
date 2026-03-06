@@ -38,12 +38,12 @@ def get_for_update(db: Session, *, id: str) -> Job | None:
 def create(
     db: Session,
     *,
-    type: str,
+    job_type: str,
     payload: dict,
     idempotency_key: str | None = None,
 ) -> Job:
     job = Job(
-        type=type,
+        job_type=job_type,
         payload=payload,
         status=JobStatus.pending,
         idempotency_key=idempotency_key,
