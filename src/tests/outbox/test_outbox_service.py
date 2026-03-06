@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from src.core.utils import now_utc
 from src.db.session import SessionLocal
 from src.jobs.service import submit_job
 from src.outbox import repository as repo
 from src.outbox.enums import OutboxStatus
-from src.outbox.events import JOB_DISPATCH_REQUESTED
 from src.outbox.models import OutboxEvent
-from src.outbox.service import publish_pending_events
+from src.outbox.events import JOB_DISPATCH_REQUESTED
+from src.outbox.service import MAX_PUBLISH_RETRIES, publish_pending_events
 from src.tests.utils import generate_idempotency_key
 
 
@@ -84,8 +85,8 @@ def test_publish_pending_events_dispatches_and_marks_event_published(db_session)
     assert event.error is None
 
 
-def test_publish_pending_events_marks_event_failed_when_dispatch_fails(db_session):
-    """Failed dispatch should mark the outbox event as failed."""
+def test_publish_pending_events_schedules_retry_when_dispatch_fails(db_session):
+    """Failed dispatch should schedule a retry for the outbox event."""
     job = submit_job(
         db_session,
         job_type="demo.outbox.publish.failed",
@@ -116,8 +117,10 @@ def test_publish_pending_events_marks_event_failed_when_dispatch_fails(db_sessio
     )
 
     assert published_count == 0
-    assert event.status == OutboxStatus.FAILED
+    assert event.status == OutboxStatus.PENDING
     assert event.error == "dispatch failed"
+    assert event.retry_count == 1
+    assert event.next_attempt_at is not None
 
 
 def test_publish_pending_events_skips_locked_events_and_publishes_next(db_session):
@@ -147,7 +150,7 @@ def test_publish_pending_events_skips_locked_events_and_publishes_next(db_sessio
     publish_session = SessionLocal()
 
     try:
-        locked_event = repo.claim_next_pending(lock_session)
+        locked_event = repo.claim_next_pending(lock_session, now=now_utc())
         assert locked_event is not None
         assert (locked_event.payload or {}).get("job_id") == first_job.id
 
@@ -186,3 +189,51 @@ def test_publish_pending_events_skips_locked_events_and_publishes_next(db_sessio
         lock_session.rollback()
         lock_session.close()
         publish_session.close()
+
+
+def test_publish_pending_events_marks_event_failed_after_retry_limit(db_session):
+    """Transient dispatch failure should become terminal after retry exhaustion."""
+    job = submit_job(
+        db_session,
+        job_type="demo.outbox.publish.retry.exhausted",
+        payload={},
+        idempotency_key=generate_idempotency_key("outbox-publish-retry-exhausted"),
+        request_id="req-retry-exhausted",
+    )
+    db_session.commit()
+
+    def failing_dispatch(job_id: str, request_id: str | None) -> None:
+        raise RuntimeError("temporary dispatch failure")
+
+    for _ in range(MAX_PUBLISH_RETRIES + 1):
+        publish_pending_events(
+            db_session,
+            dispatch_job=failing_dispatch,
+        )
+        db_session.expire_all()
+
+        event = next(
+            e
+            for e in db_session.execute(select(OutboxEvent)).scalars().all()
+            if e.event_type == JOB_DISPATCH_REQUESTED
+            and (e.payload or {}).get("job_id") == job.id
+        )
+
+        if event.status == OutboxStatus.PENDING:
+            event.next_attempt_at = None
+            db_session.commit()
+
+    db_session.expire_all()
+
+    event = next(
+        e
+        for e in db_session.execute(select(OutboxEvent)).scalars().all()
+        if e.event_type == JOB_DISPATCH_REQUESTED
+        and (e.payload or {}).get("job_id") == job.id
+    )
+
+    assert event.status == OutboxStatus.FAILED
+    assert event.error == "temporary dispatch failure"
+    assert event.retry_count == MAX_PUBLISH_RETRIES
+    assert event.next_attempt_at is None
+    assert event.published_at is None

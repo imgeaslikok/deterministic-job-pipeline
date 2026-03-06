@@ -4,7 +4,9 @@ SQLAlchemy model for transactional outbox events.
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, String, Text
+from datetime import datetime
+
+from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base
@@ -27,3 +29,10 @@ class OutboxEvent(IdMixin, TimestampMixin, Base):
     )
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
