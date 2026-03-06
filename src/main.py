@@ -1,0 +1,44 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
+
+from src.api.common.middleware import RequestIdMiddleware
+from src.api.v1.exceptions import register_exception_handlers
+from src.api.v1.router import router as v1_router
+from src.config.settings import settings
+from src.db.session import engine
+from src.db.utils import wait_for_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await run_in_threadpool(wait_for_db, engine)
+    yield
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Task Queue API",
+        version="0.1.0",
+        debug=settings.environment == "dev",
+        lifespan=lifespan,
+    )
+
+    app.add_middleware(RequestIdMiddleware)
+    register_exception_handlers(app)
+
+    app.include_router(v1_router, prefix="/api/v1")
+
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz():
+        return {"status": "ok"}
+
+    @app.get("/readyz", include_in_schema=False)
+    async def readyz():
+        return {"status": "ready"}
+
+    return app
+
+
+app = create_app()
