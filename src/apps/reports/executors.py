@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from src.jobs.exceptions import NonRetryableJobError, RetryableJobError
 from src.jobs.registry import register
 from src.jobs.types import ExecutionResult, JobContext
@@ -47,8 +49,8 @@ def generate_report(ctx: JobContext, payload: dict[str, Any]) -> ExecutionResult
         # Domain invariant violation -> do not retry.
         raise NonRetryableJobError(str(e)) from e
 
-    except Exception as e:
-        # Likely infra/transient (db, network, etc.) -> retry.
+    except SQLAlchemyError as e:
+        # Database/infrastructure failure -> retry.
         raise RetryableJobError("Failed to persist report result") from e
 
     return ExecutionResult(result=result)
