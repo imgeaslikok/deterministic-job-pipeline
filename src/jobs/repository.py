@@ -5,22 +5,14 @@ Repository helpers for jobs and job attempts.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.db.repository import save, save_and_refresh
+
 from .enums import AttemptStatus, JobStatus
 from .models import Job, JobAttempt
-
-T = TypeVar("T")
-
-
-def save(db: Session, obj: T) -> T:
-    """Persist an object and flush the session."""
-    db.add(obj)
-    db.flush()
-    return obj
 
 
 def list_by_status(db: Session, *, status: JobStatus, limit: int = 50) -> list[Job]:
@@ -65,9 +57,7 @@ def create(
         status=JobStatus.PENDING,
         idempotency_key=idempotency_key,
     )
-    job = save(db, job)
-    db.refresh(job)
-    return job
+    return save_and_refresh(db, job)
 
 
 def list_attempts(db: Session, *, job_id: str) -> list[JobAttempt]:

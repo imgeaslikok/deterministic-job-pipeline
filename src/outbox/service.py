@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from src.core.utils import now_utc
+from src.db.repository import save
 
 from . import repository as repo
 from .enums import OutboxStatus
@@ -71,7 +72,7 @@ def update_event(
     event.error = error
     event.published_at = published_at
     event.next_attempt_at = None
-    return repo.save(db, event)
+    return save(db, event)
 
 
 def schedule_retry(
@@ -89,7 +90,7 @@ def schedule_retry(
     event.next_attempt_at = now + timedelta(
         seconds=_backoff_delay_seconds(event.retry_count)
     )
-    return repo.save(db, event)
+    return save(db, event)
 
 
 def publish_pending_events(

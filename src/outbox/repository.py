@@ -5,22 +5,14 @@ Repository helpers for transactional outbox events.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TypeVar
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from src.db.repository import save
+
 from .enums import OutboxStatus
 from .models import OutboxEvent
-
-T = TypeVar("T")
-
-
-def save(db: Session, obj: T) -> T:
-    """Persist an object and flush the session."""
-    db.add(obj)
-    db.flush()
-    return obj
 
 
 def create(

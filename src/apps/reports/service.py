@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from src.db.repository import save
 from src.db.utils import tx
 
 from . import repository as repo
@@ -49,7 +50,7 @@ def _attach_job_to_report(db: Session, *, report_id: str, job_id: str) -> Report
         )
 
     report.job_id = job_id
-    repo.save(db, report)
+    save(db, report)
     return report
 
 
@@ -98,5 +99,5 @@ def complete_report(db: Session, *, report_id: str, result: dict) -> Report:
 
         report.result = result
         report.status = ReportStatus.READY
-        repo.save(db, report)
+        save(db, report)
         return report

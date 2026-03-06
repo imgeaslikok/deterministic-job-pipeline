@@ -2,21 +2,10 @@
 Repository helpers for reports.
 """
 
-from typing import TypeVar
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Report
-
-T = TypeVar("T")
-
-
-def save(db: Session, obj: T) -> T:
-    """Persist an object and flush the session."""
-    db.add(obj)
-    db.flush()
-    return obj
 
 
 def get(db: Session, *, id: str) -> Report | None:
