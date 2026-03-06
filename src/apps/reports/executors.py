@@ -8,6 +8,7 @@ from src.jobs.registry import register
 from src.jobs.types import ExecutionResult, JobContext
 
 from .exceptions import ReportNotFound
+from .job_types import REPORT_GENERATE
 from .service import complete_report
 
 
@@ -33,7 +34,7 @@ def _build_result(*, report_id: str, ctx: JobContext) -> dict[str, Any]:
     }
 
 
-@register("report.generate")
+@register(REPORT_GENERATE)
 def generate_report(ctx: JobContext, payload: dict[str, Any]) -> ExecutionResult:
     """Generate a demo report and persist the result."""
     report_id = _require_str(payload, "report_id")

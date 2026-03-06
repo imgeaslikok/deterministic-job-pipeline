@@ -11,6 +11,7 @@ from .exceptions import (
     ReportJobAlreadyAttached,
     ReportNotFound,
 )
+from .job_types import REPORT_GENERATE
 from .models import Report
 
 
@@ -58,7 +59,7 @@ def create_report_and_enqueue(
 
     job = jobs_service.submit_job(
         db=db,
-        type="report.generate",
+        type=REPORT_GENERATE,
         payload={"report_id": report.id},
         idempotency_key=idempotency_key,
         request_id=request_id,
