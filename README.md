@@ -323,3 +323,8 @@ Tests use:
 * transactional database fixtures
 
 
+---
+
+# License
+
+MIT License
