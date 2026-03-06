@@ -43,6 +43,12 @@ class ExecutorNotRegistered(JobExecutionError):
         super().__init__(f"No executor registered for job type: {job_type!r}")
 
 
+class DuplicateExecutorRegistration(JobExecutionError):
+    def __init__(self, job_type: str) -> None:
+        self.job_type = job_type
+        super().__init__(f"Executor already registered for job type: {job_type!r}")
+
+
 class RetryableJobError(JobExecutionError):
     """Transient failure: pipeline should retry until max_retries, then DLQ."""
 

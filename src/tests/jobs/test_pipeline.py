@@ -3,6 +3,7 @@ import pytest
 from src.jobs import repository as repo
 from src.jobs.enums import JobStatus
 from src.jobs.exceptions import (
+    DuplicateExecutorRegistration,
     IdempotencyKeyConflict,
     NonRetryableJobError,
     RetryableJobError,
@@ -148,6 +149,8 @@ def test_idempotency_key_conflict_raises(db_session):
 
 
 def test_missing_executor_moves_to_dlq_and_writes_attempt(db_session, get_job):
+    """Missing executor should move the job to dead and record a failed attempt."""
+
     job = submit_job(
         db_session,
         type="demo.missing-executor",
@@ -166,3 +169,17 @@ def test_missing_executor_moves_to_dlq_and_writes_attempt(db_session, get_job):
     assert len(attempts) == 1
     assert attempts[0].error is not None
     assert "No executor registered" in attempts[0].error
+
+
+def test_register_executor_raises_on_duplicate_job_type():
+    """Registering the same job type twice should raise DuplicateExecutorRegistration."""
+
+    @register("report.generate")
+    def first(ctx, payload):
+        return None
+
+    with pytest.raises(DuplicateExecutorRegistration):
+
+        @register("report.generate")
+        def second(ctx, payload):
+            return None

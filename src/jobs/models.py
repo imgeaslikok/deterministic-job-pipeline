@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base
 
-from .enums import JobStatus, AttemptStatus
+from .enums import AttemptStatus, JobStatus
 
 
 class Job(Base):

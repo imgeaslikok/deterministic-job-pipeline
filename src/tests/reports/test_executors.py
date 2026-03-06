@@ -1,11 +1,11 @@
 import pytest
 
 from src.apps.reports.enums import ReportStatus
-from src.jobs.enums import JobStatus
-from src.jobs.types import JobContext
-from src.jobs.exceptions import NonRetryableJobError
-from src.tests.factories import create_report_with_job, run_job
 from src.apps.reports.executors import generate_report
+from src.jobs.enums import JobStatus
+from src.jobs.exceptions import NonRetryableJobError
+from src.jobs.types import JobContext
+from src.tests.factories import create_report_with_job, run_job
 
 
 def test_report_generation_flow_completes_job_and_report(

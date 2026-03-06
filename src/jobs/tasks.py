@@ -86,7 +86,9 @@ def process_job(self, job_id: str) -> None:
 
                 try:
                     executor = get_executor(job.type)
-                    exec_result: ExecutionResult | None = executor(ctx, job.payload or {})
+                    exec_result: ExecutionResult | None = executor(
+                        ctx, job.payload or {}
+                    )
                     result = exec_result.result if exec_result else None
 
                     attempt_status = AttemptStatus.succeeded
