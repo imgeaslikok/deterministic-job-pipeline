@@ -10,6 +10,7 @@ from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base
+from src.db.constants import OUTBOX_EVENT_TYPE_MAX_LENGTH
 from src.db.mixins import IdMixin, TimestampMixin
 from src.db.types import enum_value_type
 
@@ -21,7 +22,9 @@ class OutboxEvent(IdMixin, TimestampMixin, Base):
 
     __tablename__ = "outbox_events"
 
-    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(
+        String(OUTBOX_EVENT_TYPE_MAX_LENGTH), index=True
+    )
     status: Mapped[OutboxStatus] = mapped_column(
         enum_value_type(OutboxStatus, name="outbox_status"),
         index=True,

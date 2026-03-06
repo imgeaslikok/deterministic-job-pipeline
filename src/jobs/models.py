@@ -18,6 +18,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.utils import now_utc
 from src.db.base import Base
+from src.db.constants import (
+    IDEMPOTENCY_KEY_MAX_LENGTH,
+    JOB_TYPE_MAX_LENGTH,
+    UUID_STR_MAX_LENGTH,
+)
 from src.db.mixins import IdMixin, TimestampMixin
 from src.db.types import enum_value_type
 
@@ -29,8 +34,10 @@ class Job(IdMixin, TimestampMixin, Base):
 
     __tablename__ = "jobs"
 
-    job_type: Mapped[str] = mapped_column(String(64), index=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    job_type: Mapped[str] = mapped_column(String(JOB_TYPE_MAX_LENGTH), index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(IDEMPOTENCY_KEY_MAX_LENGTH), nullable=True
+    )
     status: Mapped[JobStatus] = mapped_column(
         enum_value_type(JobStatus, name="job_status"),
         index=True,
@@ -59,7 +66,7 @@ class JobAttempt(IdMixin, Base):
     )
 
     job_id: Mapped[str] = mapped_column(
-        String(36),
+        String(UUID_STR_MAX_LENGTH),
         ForeignKey("jobs.id", ondelete="CASCADE"),
         index=True,
     )

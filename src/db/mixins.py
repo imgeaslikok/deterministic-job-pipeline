@@ -12,12 +12,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.utils import now_utc
 
+from .constants import UUID_STR_MAX_LENGTH
+
 
 class IdMixin:
     """Adds a UUID primary key column."""
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+        String(UUID_STR_MAX_LENGTH), primary_key=True, default=lambda: str(uuid.uuid4())
     )
 
 

@@ -6,6 +6,7 @@ from sqlalchemy import JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base
+from src.db.constants import UUID_STR_MAX_LENGTH
 from src.db.mixins import IdMixin, TimestampMixin
 from src.db.types import enum_value_type
 
@@ -23,7 +24,7 @@ class Report(IdMixin, TimestampMixin, Base):
         default=ReportStatus.PENDING,
     )
     job_id: Mapped[str | None] = mapped_column(
-        String(36),
+        String(UUID_STR_MAX_LENGTH),
         nullable=True,
     )
     result: Mapped[dict | None] = mapped_column(
