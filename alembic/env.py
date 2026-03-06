@@ -4,7 +4,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
-import src.db.registry  # noqa: F401
+import src.db.models  # noqa: F401
 from alembic import context
 from src.config.settings import settings
 from src.db.base import Base

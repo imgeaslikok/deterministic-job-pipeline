@@ -1,10 +1,8 @@
-import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
     DateTime,
-    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -15,43 +13,28 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base
+from src.db.mixins import IdMixin, TimestampMixin
+from src.db.types import enum_value_type
 
-from .enums import JobStatus, AttemptStatus
+from .enums import AttemptStatus, JobStatus
 
 
-class Job(Base):
+class Job(IdMixin, TimestampMixin, Base):
     """Current job state (latest snapshot)."""
 
     __tablename__ = "jobs"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    type: Mapped[str] = mapped_column(String(64), index=True)
-
+    job_type: Mapped[str] = mapped_column(String(64), index=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
-
     status: Mapped[JobStatus] = mapped_column(
-        Enum(JobStatus, name="job_status"),
+        enum_value_type(JobStatus, name="job_status"),
         index=True,
-        default=JobStatus.pending,
+        default=JobStatus.PENDING,
     )
-
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
     attempts_history: Mapped[list["JobAttempt"]] = relationship(
         "JobAttempt",
@@ -61,7 +44,7 @@ class Job(Base):
     )
 
 
-class JobAttempt(Base):
+class JobAttempt(IdMixin, Base):
     """Immutable attempt log entry for a job execution."""
 
     __tablename__ = "job_attempts"
@@ -70,9 +53,6 @@ class JobAttempt(Base):
         Index("ix_job_attempt_jobid_attemptno", "job_id", "attempt_no"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
     job_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("jobs.id", ondelete="CASCADE"),
@@ -80,10 +60,10 @@ class JobAttempt(Base):
     )
 
     attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(
-        Enum(AttemptStatus, name="attemp_status"),
+    status: Mapped[AttemptStatus] = mapped_column(
+        enum_value_type(AttemptStatus, name="attempt_status"),
         index=True,
-        default=AttemptStatus.running,
+        default=AttemptStatus.RUNNING,
     )
 
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

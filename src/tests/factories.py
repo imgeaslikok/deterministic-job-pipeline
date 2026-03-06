@@ -26,7 +26,7 @@ def create_job(
     """
     job = submit_job(
         db,
-        type=job_type,
+        job_type=job_type,
         payload=payload or {},
         idempotency_key=generate_idempotency_key(idempotency_prefix),
         request_id=request_id,

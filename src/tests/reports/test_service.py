@@ -20,7 +20,7 @@ def test_create_report_creates_pending_row(db_session, get_report):
 
     report2 = get_report(report.id)
     assert report2 is not None
-    assert report2.status == ReportStatus.pending
+    assert report2.status == ReportStatus.PENDING
     assert report2.job_id is None
 
 
@@ -66,7 +66,7 @@ def test_complete_report_sets_ready_and_result(db_session, get_report):
 
     report2 = get_report(report.id)
     assert report2 is not None
-    assert report2.status == ReportStatus.ready
+    assert report2.status == ReportStatus.READY
     assert report2.result == result
 
 

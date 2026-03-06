@@ -1,14 +1,17 @@
+from typing import TypeVar
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Report
 
+T = TypeVar("T")
 
-def create(db: Session, *, report: Report) -> Report:
-    db.add(report)
+
+def save(db: Session, obj: T) -> T:
+    db.add(obj)
     db.flush()
-    db.refresh(report)
-    return report
+    return obj
 
 
 def get(db: Session, *, id: str) -> Report | None:
@@ -20,7 +23,8 @@ def get_for_update(db: Session, *, id: str) -> Report | None:
     return db.execute(stmt).scalar_one_or_none()
 
 
-def save(db: Session, report: Report) -> Report:
+def create(db: Session, *, report: Report) -> Report:
     db.add(report)
     db.flush()
+    db.refresh(report)
     return report

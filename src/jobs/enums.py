@@ -4,27 +4,27 @@ import enum
 
 
 class JobStatus(str, enum.Enum):
-    pending = "pending"
-    running = "running"
-    completed = "completed"
-    failed = "failed"
-    dead = "dead"
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    DEAD = "dead"
 
 
 class AttemptStatus(str, enum.Enum):
-    running = "running"
-    succeeded = "succeeded"
-    failed = "failed"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 # observability (events)
 
 
 class JobEvent(str, enum.Enum):
-    attempt_begin = "job_attempt_begin"
-    attempt_noop = "job_attempt_noop"
-    attempt_succeeded = "job_attempt_succeeded"
-    retry_needed = "job_retry_needed"
-    retry_scheduled = "job_retry_scheduled"
-    retry_eager_simulated = "job_retry_eager_simulated"
-    moved_to_dlq = "job_moved_to_dlq"
+    ATTEMPT_BEGIN = "job_attempt_begin"
+    ATTEMPT_NOOP = "job_attempt_noop"
+    ATTEMPT_SUCCEEDED = "job_attempt_succeeded"
+    RETRY_NEEDED = "job_retry_needed"
+    RETRY_SCHEDULED = "job_retry_scheduled"
+    RETRY_EAGER_SIMULATED = "job_retry_eager_simulated"
+    MOVED_TO_DLQ = "job_moved_to_dlq"

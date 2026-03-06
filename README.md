@@ -102,7 +102,7 @@ The worker resolves the executor at runtime using the registry.
 Job types are mapped to executors through a registry.
 
 ```
-job.type → executor function
+job.job_type → executor function
 ```
 
 Executors are registered via decorators and loaded at worker startup.

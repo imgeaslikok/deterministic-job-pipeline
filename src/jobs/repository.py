@@ -12,12 +12,9 @@ from .models import Job, JobAttempt
 T = TypeVar("T")
 
 
-def _persist(db: Session, obj: T, *, refresh: bool = False) -> T:
-    """Add + flush an ORM object (no commit)."""
+def save(db: Session, obj: T) -> T:
     db.add(obj)
     db.flush()
-    if refresh:
-        db.refresh(obj)
     return obj
 
 
@@ -38,21 +35,19 @@ def get_for_update(db: Session, *, id: str) -> Job | None:
 def create(
     db: Session,
     *,
-    type: str,
+    job_type: str,
     payload: dict,
     idempotency_key: str | None = None,
 ) -> Job:
     job = Job(
-        type=type,
+        job_type=job_type,
         payload=payload,
-        status=JobStatus.pending,
+        status=JobStatus.PENDING,
         idempotency_key=idempotency_key,
     )
-    return _persist(db, job, refresh=True)
-
-
-def save(db: Session, job: Job) -> Job:
-    return _persist(db, job)
+    job = save(db, job)
+    db.refresh(job)
+    return job
 
 
 def list_attempts(db: Session, *, job_id: str) -> list[JobAttempt]:
@@ -89,7 +84,7 @@ def create_attempt(
         error=error,
         started_at=started_at or datetime.now(UTC),
     )
-    return _persist(db, attempt)
+    return save(db, attempt)
 
 
 def update_attempt(
@@ -106,4 +101,4 @@ def update_attempt(
         attempt.error = error
     if finished_at is not None:
         attempt.finished_at = finished_at
-    return _persist(db, attempt)
+    return save(db, attempt)

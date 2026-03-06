@@ -1,4 +1,6 @@
 import time
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from sqlalchemy.engine import Engine
 
@@ -25,3 +27,19 @@ def wait_for_db(
             time.sleep(sleep_seconds)
 
     raise RuntimeError("Database not ready") from last_exc
+
+
+@contextmanager
+def tx(db) -> Iterator[Any]:
+    """
+    Transaction boundary helper.
+
+    Ensures row locks (e.g. SELECT ... FOR UPDATE) are released promptly,
+    which is required for deterministic eager retry simulation.
+    """
+    try:
+        yield
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise

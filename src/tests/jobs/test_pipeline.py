@@ -3,14 +3,15 @@ import pytest
 from src.jobs import repository as repo
 from src.jobs.enums import JobStatus
 from src.jobs.exceptions import (
+    DuplicateExecutorRegistration,
     IdempotencyKeyConflict,
     NonRetryableJobError,
     RetryableJobError,
 )
 from src.jobs.registry import register
 from src.jobs.service import submit_job
-from src.jobs.tasks import process_job
 from src.jobs.types import ExecutionResult
+from src.tests.factories import run_job
 from src.tests.utils import generate_idempotency_key
 
 
@@ -23,17 +24,17 @@ def test_success_path_creates_attempt_and_completes(db_session, get_job):
 
     job = submit_job(
         db_session,
-        type="demo.success",
+        job_type="demo.success",
         payload={"x": 1},
         idempotency_key=generate_idempotency_key("job-success"),
     )
     db_session.commit()  # worker task uses a separate session
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.completed
+    assert job2.status == JobStatus.COMPLETED
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 1
@@ -53,17 +54,17 @@ def test_retryable_error_retries_and_eventually_completes(db_session, get_job):
 
     job = submit_job(
         db_session,
-        type="demo.retry",
+        job_type="demo.retry",
         payload={},
         idempotency_key=generate_idempotency_key("job-retry"),
     )
     db_session.commit()
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.completed
+    assert job2.status == JobStatus.COMPLETED
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 2
@@ -79,17 +80,17 @@ def test_non_retryable_error_moves_to_dlq(db_session, get_job):
 
     job = submit_job(
         db_session,
-        type="demo.dead",
+        job_type="demo.dead",
         payload={},
         idempotency_key=generate_idempotency_key("job-dead"),
     )
     db_session.commit()
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.dead
+    assert job2.status == JobStatus.DEAD
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 1
@@ -107,14 +108,14 @@ def test_idempotency_key_returns_existing_job_without_creating_new_one(db_sessio
 
     job1 = submit_job(
         db_session,
-        type="demo.idem",
+        job_type="demo.idem",
         payload={"a": 1},
         idempotency_key=key,
     )
 
     job2 = submit_job(
         db_session,
-        type="demo.idem",
+        job_type="demo.idem",
         payload={"a": 1},
         idempotency_key=key,
     )
@@ -133,7 +134,7 @@ def test_idempotency_key_conflict_raises(db_session):
 
     _ = submit_job(
         db_session,
-        type="demo.idem2",
+        job_type="demo.idem2",
         payload={"a": 1},
         idempotency_key=key,
     )
@@ -141,28 +142,43 @@ def test_idempotency_key_conflict_raises(db_session):
     with pytest.raises(IdempotencyKeyConflict):
         _ = submit_job(
             db_session,
-            type="demo.idem2",
+            job_type="demo.idem2",
             payload={"a": 2},
             idempotency_key=key,
         )
 
 
 def test_missing_executor_moves_to_dlq_and_writes_attempt(db_session, get_job):
+    """Missing executor should move the job to dead and record a failed attempt."""
     job = submit_job(
         db_session,
-        type="demo.missing-executor",
+        job_type="demo.missing-executor",
         payload={},
         idempotency_key=generate_idempotency_key("job-missing-exec"),
     )
     db_session.commit()
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None
-    assert job2.status == JobStatus.dead
+    assert job2.status == JobStatus.DEAD
 
     attempts = repo.list_attempts(db_session, job_id=job.id)
     assert len(attempts) == 1
     assert attempts[0].error is not None
     assert "No executor registered" in attempts[0].error
+
+
+def test_register_executor_raises_on_duplicate_job_type():
+    """Registering the same job type twice should raise DuplicateExecutorRegistration."""
+
+    @register("report.generate")
+    def first(ctx, payload):
+        return None
+
+    with pytest.raises(DuplicateExecutorRegistration):
+
+        @register("report.generate")
+        def second(ctx, payload):
+            return None

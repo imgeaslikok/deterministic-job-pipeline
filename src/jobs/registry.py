@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from .exceptions import ExecutorNotRegistered
+from .exceptions import DuplicateExecutorRegistration, ExecutorNotRegistered
 from .types import Executor
 
 _EXECUTORS: Dict[str, Executor] = {}
@@ -17,6 +17,8 @@ def register_executor(job_type: str):
     """
 
     def decorator(fn: Executor) -> Executor:
+        if job_type in _EXECUTORS:
+            raise DuplicateExecutorRegistration(job_type)
         _EXECUTORS[job_type] = fn
         return fn
 
