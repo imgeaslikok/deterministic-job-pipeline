@@ -28,19 +28,16 @@ def _load_executors() -> None:
 _load_executors()
 
 
-def _task_log(task, level: str, event: JobEvent, **fields) -> None:
+def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
     """Best-effort logging hook."""
-    try:
-        logger = getattr(task, "logger", None)
-        msg = f"[jobs] {event.value} " + " ".join(
-            f"{k}={v}" for k, v in fields.items() if v is not None
-        )
-        if logger:
-            getattr(logger, level, logger.info)(msg)
-        else:
-            print(msg)
-    except Exception:
-        pass
+
+    logger = getattr(task, "logger", None)
+    if not logger:
+        return
+    msg = f"[jobs] {event.value} " + " ".join(
+        f"{k}={v}" for k, v in fields.items() if v is not None
+    )
+    getattr(logger, level.value, logger.info)(msg)
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=2)
@@ -58,7 +55,11 @@ def process_job(self, job_id: str) -> None:
     db = SessionLocal()
     try:
         _task_log(
-            self, "info", JobEvent.ATTEMPT_BEGIN, job_id=job_id, retries=current_retries
+            self,
+            LogLevel.INFO,
+            JobEvent.ATTEMPT_BEGIN,
+            job_id=job_id,
+            retries=current_retries,
         )
 
         started_at = now_utc()
@@ -66,9 +67,9 @@ def process_job(self, job_id: str) -> None:
         need_retry = False
         retry_reason: str | None = None
         attempt_no: int | None = None
-        event: JobEvent = JobEvent.ATTEMPT_SUCCEEDED
-        level: str = LogLevel.INFO
         detail: str | None = None
+        event: JobEvent = JobEvent.ATTEMPT_SUCCEEDED
+        level: LogLevel = LogLevel.INFO
 
         with tx(db):
             begin = pipeline.begin_attempt(db, job_id=job_id, started_at=started_at)
