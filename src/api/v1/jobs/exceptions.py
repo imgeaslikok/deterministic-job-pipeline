@@ -1,7 +1,7 @@
 """
-API exception mappings (Domain → HTTP).
+API exception mappings for the jobs domain.
 
-Converts jobs domain exceptions into consistent HTTP responses.
+Maps domain exceptions to HTTP responses used by the API layer.
 """
 
 from http import HTTPStatus
@@ -18,6 +18,7 @@ from src.jobs.exceptions import (
 
 
 async def _job_not_found(_: Request, exc: JobNotFound) -> JSONResponse:
+    """Handle JobNotFound exceptions."""
     return error_response(
         HTTPStatus.NOT_FOUND,
         detail="Job not found",
@@ -26,6 +27,7 @@ async def _job_not_found(_: Request, exc: JobNotFound) -> JSONResponse:
 
 
 async def _invalid_job_state(_: Request, exc: InvalidJobState) -> JSONResponse:
+    """Handle InvalidJobState exceptions."""
     return error_response(
         HTTPStatus.CONFLICT,
         detail="Invalid job state",
@@ -37,6 +39,7 @@ async def _invalid_job_state(_: Request, exc: InvalidJobState) -> JSONResponse:
 async def _idempotency_conflict(
     _: Request, exc: IdempotencyKeyConflict
 ) -> JSONResponse:
+    """Handle IdempotencyKeyConflict exceptions."""
     return error_response(
         HTTPStatus.CONFLICT,
         detail="Idempotency-Key was reused with different request parameters.",
@@ -45,7 +48,9 @@ async def _idempotency_conflict(
 
 
 def register(app: FastAPI) -> None:
-    """Register jobs domain exception handlers."""
+    """
+    Register jobs exception handlers on the FastAPI app.
+    """
     app.add_exception_handler(JobNotFound, _job_not_found)
     app.add_exception_handler(InvalidJobState, _invalid_job_state)
     app.add_exception_handler(IdempotencyKeyConflict, _idempotency_conflict)

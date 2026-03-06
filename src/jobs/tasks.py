@@ -1,3 +1,10 @@
+"""
+Celery tasks for the job execution pipeline.
+
+Defines the worker entrypoints responsible for running jobs and
+publishing outbox dispatch events.
+"""
+
 from __future__ import annotations
 
 from importlib import import_module
@@ -9,6 +16,7 @@ from src.core.enums import LogLevel
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
 from src.db.utils import tx
+from src.outbox import service as outbox_service
 
 from . import pipeline
 from .enums import AttemptStatus, JobEvent, JobStatus
@@ -20,7 +28,9 @@ from .utils import is_eager, retry_countdown
 
 
 def _load_executors() -> None:
-    """Import executor modules so their decorators register handlers (worker-only)."""
+    """
+    Import executor modules so their decorators register handlers.
+    """
 
     for module_path in settings.job_executors:
         import_module(module_path)
@@ -30,7 +40,9 @@ _load_executors()
 
 
 def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
-    """Log job pipeline events through the task logger."""
+    """
+    Emit structured job pipeline logs through the task logger.
+    """
 
     logger = getattr(task, "logger", None)
     if not logger:
@@ -43,7 +55,12 @@ def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=2)
 def process_job(self, job_id: str) -> None:
-    """Run a single job attempt; persist outcome and schedule retry/DLQ."""
+    """
+    Execute a single job attempt.
+
+    Runs the registered executor, persists the attempt outcome,
+    and schedules retries or DLQ transitions when required.
+    """
 
     current_retries = int(getattr(self.request, "retries", 0))
     max_retries = int(getattr(self, "max_retries", 3))
@@ -179,4 +196,19 @@ def process_job(self, job_id: str) -> None:
         raise self.retry(
             exc=Exception(retry_reason or DEFAULT_RETRY_ERROR_MESSAGE),
             countdown=countdown,
+        )
+
+
+@celery.task
+def publish_job_dispatch_events() -> int:
+    """
+    Publish pending job dispatch events from the outbox.
+    """
+
+    from .dispatch import dispatch_job
+
+    with SessionLocal() as db:
+        return outbox_service.publish_pending_events(
+            db,
+            dispatch_job=dispatch_job,
         )

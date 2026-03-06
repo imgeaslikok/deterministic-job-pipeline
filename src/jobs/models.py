@@ -1,4 +1,8 @@
-from datetime import UTC, datetime
+"""
+SQLAlchemy models for jobs and job attempts.
+"""
+
+from datetime import datetime
 
 from sqlalchemy import (
     JSON,
@@ -12,6 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from src.core.utils import now_utc
 from src.db.base import Base
 from src.db.mixins import IdMixin, TimestampMixin
 from src.db.types import enum_value_type
@@ -77,7 +82,7 @@ class JobAttempt(IdMixin, Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
+        default=now_utc,
     )
 
     job: Mapped["Job"] = relationship("Job", back_populates="attempts_history")

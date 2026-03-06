@@ -1,3 +1,7 @@
+"""
+Reusable SQLAlchemy model mixins.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -10,12 +14,16 @@ from src.core.utils import now_utc
 
 
 class IdMixin:
+    """Adds a UUID primary key column."""
+
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
 
 
 class TimestampMixin:
+    """Adds created_at and updated_at timestamp columns."""
+
     created_at: Mapped[datetime] = mapped_column(default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         default=now_utc,

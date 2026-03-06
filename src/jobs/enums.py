@@ -1,9 +1,13 @@
-import enum
+"""
+Job lifecycle and event enums.
+"""
 
-# lifecycle (domain state)
+import enum
 
 
 class JobStatus(str, enum.Enum):
+    """Possible lifecycle states of a job."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -12,15 +16,16 @@ class JobStatus(str, enum.Enum):
 
 
 class AttemptStatus(str, enum.Enum):
+    """Execution status of a job attempt."""
+
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
 
 
-# observability (events)
-
-
 class JobEvent(str, enum.Enum):
+    """Structured events emitted during job execution."""
+
     ATTEMPT_BEGIN = "job_attempt_begin"
     ATTEMPT_NOOP = "job_attempt_noop"
     ATTEMPT_SUCCEEDED = "job_attempt_succeeded"

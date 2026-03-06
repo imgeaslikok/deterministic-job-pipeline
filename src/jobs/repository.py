@@ -1,3 +1,7 @@
+"""
+Repository helpers for jobs and job attempts.
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -13,21 +17,36 @@ T = TypeVar("T")
 
 
 def save(db: Session, obj: T) -> T:
+    """Persist an object and flush the session."""
     db.add(obj)
     db.flush()
     return obj
 
 
+def list_by_status(db: Session, *, status: JobStatus, limit: int = 50) -> list[Job]:
+    """List jobs filtered by status."""
+    stmt = (
+        select(Job)
+        .where(Job.status == status)
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
 def get(db: Session, *, id: str) -> Job | None:
+    """Fetch a job by id."""
     return db.get(Job, id)
 
 
 def get_by_idempotency_key(db: Session, *, key: str) -> Job | None:
+    """Fetch a job by idempotency key."""
     stmt = select(Job).where(Job.idempotency_key == key)
     return db.execute(stmt).scalar_one_or_none()
 
 
 def get_for_update(db: Session, *, id: str) -> Job | None:
+    """Fetch a job with a row-level lock."""
     stmt = select(Job).where(Job.id == id).with_for_update()
     return db.execute(stmt).scalar_one_or_none()
 
@@ -39,6 +58,7 @@ def create(
     payload: dict,
     idempotency_key: str | None = None,
 ) -> Job:
+    """Create and persist a new job."""
     job = Job(
         job_type=job_type,
         payload=payload,
@@ -51,6 +71,7 @@ def create(
 
 
 def list_attempts(db: Session, *, job_id: str) -> list[JobAttempt]:
+    """Return the attempt history for a job."""
     stmt = (
         select(JobAttempt)
         .where(JobAttempt.job_id == job_id)
@@ -60,6 +81,7 @@ def list_attempts(db: Session, *, job_id: str) -> list[JobAttempt]:
 
 
 def get_attempt(db: Session, *, job_id: str, attempt_no: int) -> JobAttempt | None:
+    """Fetch a specific attempt for a job."""
     stmt = (
         select(JobAttempt)
         .where(JobAttempt.job_id == job_id)
@@ -77,6 +99,7 @@ def create_attempt(
     error: str | None = None,
     started_at: datetime | None = None,
 ) -> JobAttempt:
+    """Create a new attempt record."""
     attempt = JobAttempt(
         job_id=job_id,
         attempt_no=attempt_no,
@@ -95,6 +118,7 @@ def update_attempt(
     error: str | None = None,
     finished_at: datetime | None = None,
 ) -> JobAttempt:
+    """Update fields of an existing attempt record."""
     if status is not None:
         attempt.status = status.value
     if error is not None:

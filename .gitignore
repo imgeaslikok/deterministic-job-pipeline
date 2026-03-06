@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 alembic/*.pyc
+celerybeat-schedule*
 
 .pytest_cache/
 .mypy_cache/

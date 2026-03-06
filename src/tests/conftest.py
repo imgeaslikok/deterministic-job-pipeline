@@ -1,3 +1,10 @@
+"""
+Shared pytest fixtures for reports integration tests.
+
+Provides database sessions, executor registry isolation,
+and helpers for loading reports and jobs from the database.
+"""
+
 import importlib
 
 import pytest
@@ -6,12 +13,6 @@ from src.apps.reports import repository as reports_repo
 from src.db.session import SessionLocal
 from src.jobs import repository as jobs_repo
 from src.jobs.registry import clear_registry
-
-
-@pytest.fixture(scope="session")
-def api_base() -> str:
-    """Base API prefix."""
-    return "/api/v1"
 
 
 @pytest.fixture()

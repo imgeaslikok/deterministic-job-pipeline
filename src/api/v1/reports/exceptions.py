@@ -1,7 +1,7 @@
 """
-API exception mappings (Domain → HTTP).
+API exception mappings for the reports domain.
 
-Converts reports domain exceptions into consistent HTTP responses.
+Maps domain exceptions to HTTP responses used by the API layer.
 """
 
 from http import HTTPStatus
@@ -18,6 +18,7 @@ from src.apps.reports.exceptions import (
 
 
 async def _report_not_found(_: Request, exc: ReportNotFound) -> JSONResponse:
+    """Handle ReportNotFound exceptions."""
     return error_response(
         HTTPStatus.NOT_FOUND,
         detail="Report not found",
@@ -26,6 +27,7 @@ async def _report_not_found(_: Request, exc: ReportNotFound) -> JSONResponse:
 
 
 async def _invalid_report_state(_: Request, exc: InvalidReportState) -> JSONResponse:
+    """Handle InvalidReportState exceptions."""
     return error_response(
         HTTPStatus.CONFLICT,
         detail="Invalid report state",
@@ -37,6 +39,7 @@ async def _invalid_report_state(_: Request, exc: InvalidReportState) -> JSONResp
 async def _report_job_already_attached(
     _: Request, exc: ReportJobAlreadyAttached
 ) -> JSONResponse:
+    """Handle ReportJobAlreadyAttached exceptions."""
     return error_response(
         HTTPStatus.CONFLICT,
         detail="Report already has a different job attached",
@@ -47,7 +50,9 @@ async def _report_job_already_attached(
 
 
 def register(app: FastAPI) -> None:
-    """Register reports domain exception handlers."""
+    """
+    Register reports exception handlers on the FastAPI app.
+    """
     app.add_exception_handler(ReportNotFound, _report_not_found)
     app.add_exception_handler(InvalidReportState, _invalid_report_state)
     app.add_exception_handler(ReportJobAlreadyAttached, _report_job_already_attached)

@@ -1,3 +1,9 @@
+"""
+Reports API endpoints.
+
+Provides operations for creating and retrieving reports.
+"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -18,6 +24,9 @@ def create_report(
     request_id: str | None = Header(default=None, alias="X-Request-Id"),
     db: Session = Depends(get_db),
 ) -> ReportResponse:
+    """
+    Create a new report and submit its generation job.
+    """
     report = reports_service.create_report(
         db=db,
         idempotency_key=idempotency_key,
@@ -28,7 +37,9 @@ def create_report(
 
 @router.get("/{id}", response_model=ReportResponse)
 def get_report(id: str, db: Session = Depends(get_db)) -> ReportResponse:
-    """Fetch a report by id."""
+    """
+    Fetch a report by id.
+    """
     report = reports_service.get_report(db=db, report_id=id)
     if report is None:
         raise HTTPException(status_code=404, detail="Report not found")

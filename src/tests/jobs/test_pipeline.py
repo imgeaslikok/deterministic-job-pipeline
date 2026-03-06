@@ -1,3 +1,10 @@
+"""
+Integration tests for the job execution pipeline.
+
+Covers successful execution, retry behavior, DLQ handling,
+idempotency semantics, and executor registration.
+"""
+
 import pytest
 
 from src.jobs import repository as repo

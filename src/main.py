@@ -1,3 +1,7 @@
+"""
+FastAPI application factory and startup lifecycle.
+"""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,11 +17,13 @@ from src.db.utils import wait_for_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Wait for the database to become reachable on startup."""
     await run_in_threadpool(wait_for_db, engine)
     yield
 
 
 def create_app() -> FastAPI:
+    """Create and configure the FastAPI application."""
     app = FastAPI(
         title="Task Queue API",
         version="0.1.0",
@@ -32,10 +38,12 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz():
+        """Liveness probe."""
         return {"status": "ok"}
 
     @app.get("/readyz", include_in_schema=False)
     async def readyz():
+        """Readiness probe."""
         return {"status": "ready"}
 
     return app

@@ -1,3 +1,9 @@
+"""
+Job state transition helpers.
+
+Handles attempt lifecycle updates under database row locks.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -12,18 +18,16 @@ from .types import AttemptResult
 
 
 def _is_terminal(status: JobStatus) -> bool:
+    """Return whether the job is in a terminal state."""
     return status in (JobStatus.COMPLETED, JobStatus.DEAD)
 
 
 def begin_attempt(db: Session, *, job_id: str, started_at: datetime) -> AttemptResult:
     """
-    Start a single attempt under a row lock.
+    Start a job attempt under a row lock.
 
-    - Locks the job row (SELECT ... FOR UPDATE)
-    - Allocates attempt_no from job.attempts + 1
-    - Marks job as running and creates an attempt row
-
-    Returns should_run=False for not_found / terminal / duplicate invocations.
+    Creates a running attempt row unless the job is missing, terminal,
+    or already being processed by a concurrent invocation.
     """
     job = repo.get_for_update(db, id=job_id)
     if not job:
@@ -68,7 +72,8 @@ def finalize_attempt(
     """
     Finalize an attempt and update the job state.
 
-    Must be called within the same transaction started by the worker.
+    Updates both the immutable attempt row and the current job snapshot
+    within the active transaction.
     """
     job = repo.get_for_update(db, id=job_id)
     if not job or _is_terminal(job.status):
@@ -96,7 +101,7 @@ def finalize_attempt(
 
 
 def move_to_dead(db: Session, *, job_id: str, error: str) -> None:
-    """Force a job into DLQ (dead)."""
+    """Move a job to the DLQ state."""
     job = repo.get_for_update(db, id=job_id)
     if not job or _is_terminal(job.status):
         return
