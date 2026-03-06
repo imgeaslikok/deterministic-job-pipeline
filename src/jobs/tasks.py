@@ -7,13 +7,9 @@ publishing outbox dispatch events.
 
 from __future__ import annotations
 
-from importlib import import_module
-
 from src.config.celery import celery
-from src.config.settings import settings
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
-from src.core.logging import build_log_extra
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
 from src.db.utils import tx
@@ -24,33 +20,9 @@ from .exceptions import ExecutorNotRegistered, NonRetryableJobError, RetryableJo
 from .messages import DEFAULT_RETRY_ERROR_MESSAGE, dlq_max_retries_error
 from .registry import get_executor
 from .types import ExecutionResult, JobContext
-from .utils import is_eager, retry_countdown
+from .utils import is_eager, load_executors, retry_countdown, task_log
 
-
-def _load_executors() -> None:
-    """
-    Import executor modules so their decorators register handlers.
-    """
-
-    for module_path in settings.job_executors:
-        import_module(module_path)
-
-
-def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
-    """
-    Emit structured job pipeline logs through the task logger.
-    """
-
-    logger = getattr(task, "logger", None)
-    if not logger:
-        return
-
-    extra = build_log_extra(
-        component="jobs.worker",
-        event=event.value,
-        **fields,
-    )
-    getattr(logger, level.value, logger.info)(event.value, extra=extra)
+load_executors()
 
 
 def _classify_execution_error(
@@ -78,9 +50,6 @@ def _classify_execution_error(
     raise exc
 
 
-_load_executors()
-
-
 @celery.task(bind=True, max_retries=3, default_retry_delay=2)
 def process_job(self, job_id: str) -> None:
     """
@@ -97,7 +66,7 @@ def process_job(self, job_id: str) -> None:
     request_id = headers.get(REQUEST_ID_HEADER)
 
     with SessionLocal() as db:
-        _task_log(
+        task_log(
             self,
             LogLevel.INFO,
             JobEvent.ATTEMPT_BEGIN,
@@ -183,7 +152,7 @@ def process_job(self, job_id: str) -> None:
                         result=result,
                     )
 
-        _task_log(
+        task_log(
             self,
             level,
             event,
@@ -197,7 +166,7 @@ def process_job(self, job_id: str) -> None:
             return
 
         if is_eager(celery_app=celery):
-            _task_log(
+            task_log(
                 self,
                 LogLevel.WARNING,
                 JobEvent.RETRY_EAGER_SIMULATED,
@@ -209,7 +178,7 @@ def process_job(self, job_id: str) -> None:
             return self.apply(args=(job_id,), throw=True, retries=current_retries + 1)
 
         countdown = retry_countdown(current_retries)
-        _task_log(
+        task_log(
             self,
             LogLevel.WARNING,
             JobEvent.RETRY_SCHEDULED,
