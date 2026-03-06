@@ -10,7 +10,7 @@ from src.outbox import service as outbox_service
 from .dispatch import dispatch_job
 
 
-def publish_job_dispatch_events(*, limit: int = 100) -> int:
+def publish_outbox_job_dispatch_events(*, limit: int = 100) -> int:
     """
     Publish pending job dispatch events from the outbox.
     """
