@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Optional
 
 from src.config.celery import celery
 from src.config.settings import settings
@@ -14,6 +13,7 @@ from src.db.utils import tx
 from . import pipeline
 from .enums import AttemptStatus, JobEvent, JobStatus
 from .exceptions import ExecutorNotRegistered, NonRetryableJobError, RetryableJobError
+from .messages import DEFAULT_RETRY_ERROR_MESSAGE, dlq_max_retries_error
 from .registry import get_executor
 from .types import ExecutionResult, JobContext
 from .utils import is_eager, retry_countdown
@@ -21,6 +21,7 @@ from .utils import is_eager, retry_countdown
 
 def _load_executors() -> None:
     """Import executor modules so their decorators register handlers (worker-only)."""
+
     for module_path in settings.job_executors:
         import_module(module_path)
 
@@ -29,7 +30,7 @@ _load_executors()
 
 
 def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
-    """Best-effort logging hook."""
+    """Log job pipeline events through the task logger."""
 
     logger = getattr(task, "logger", None)
     if not logger:
@@ -43,17 +44,14 @@ def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
 @celery.task(bind=True, max_retries=3, default_retry_delay=2)
 def process_job(self, job_id: str) -> None:
     """Run a single job attempt; persist outcome and schedule retry/DLQ."""
+
     current_retries = int(getattr(self.request, "retries", 0))
     max_retries = int(getattr(self, "max_retries", 3))
 
-    request_id: Optional[str]
-    try:
-        request_id = getattr(self.request, "headers", {}).get(REQUEST_ID_HEADER)  # type: ignore[assignment]
-    except Exception:
-        request_id = None
+    headers = getattr(self.request, "headers", None) or {}
+    request_id = headers.get(REQUEST_ID_HEADER)
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         _task_log(
             self,
             LogLevel.INFO,
@@ -88,8 +86,8 @@ def process_job(self, job_id: str) -> None:
                     db=db, job_id=job_id, attempt_no=attempt_no, request_id=request_id
                 )
 
-                attempt_status: AttemptStatus
-                job_status: JobStatus
+                attempt_status: AttemptStatus = AttemptStatus.FAILED
+                job_status: JobStatus = JobStatus.DEAD
                 error: str | None = None
                 result: dict | None = None
 
@@ -105,26 +103,21 @@ def process_job(self, job_id: str) -> None:
 
                 except ExecutorNotRegistered as e:
                     error = str(e)
-                    attempt_status = AttemptStatus.FAILED
-                    job_status = JobStatus.DEAD
                     event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
 
                 except NonRetryableJobError as e:
                     error = str(e)
-                    attempt_status = AttemptStatus.FAILED
-                    job_status = JobStatus.DEAD
                     event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
 
                 except RetryableJobError as e:
                     error = str(e)
-                    attempt_status = AttemptStatus.FAILED
                     job_status = JobStatus.PENDING
 
                     if current_retries >= max_retries:
                         pipeline.move_to_dead(
                             db,
                             job_id=job_id,
-                            error=f"DLQ: {error} (max retries exceeded)",
+                            error=dlq_max_retries_error(error),
                         )
                         job_status = JobStatus.DEAD
                         event, level, detail = (
@@ -184,8 +177,6 @@ def process_job(self, job_id: str) -> None:
             detail=retry_reason,
         )
         raise self.retry(
-            exc=Exception(retry_reason or "Transient error"), countdown=countdown
+            exc=Exception(retry_reason or DEFAULT_RETRY_ERROR_MESSAGE),
+            countdown=countdown,
         )
-
-    finally:
-        db.close()

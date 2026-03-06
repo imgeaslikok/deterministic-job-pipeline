@@ -17,6 +17,7 @@ from .models import Report
 
 def _create_report(db: Session) -> Report:
     """Create a report row only (does not enqueue jobs)."""
+
     with tx(db):
         report = Report(status=ReportStatus.PENDING)
         repo.create(db, report=report)
@@ -25,6 +26,7 @@ def _create_report(db: Session) -> Report:
 
 def _attach_job(db: Session, *, report_id: str, job_id: str) -> Report:
     """Attach a job to a report (idempotent if already attached to the same job)."""
+
     with tx(db):
         report = repo.get_for_update(db, id=report_id)
         if report is None:
@@ -53,6 +55,7 @@ def create_report_and_enqueue(
     db: Session, *, idempotency_key: str | None, request_id: str | None
 ) -> Report:
     """Create a report and enqueue the corresponding job."""
+
     from src.jobs import service as jobs_service
 
     report = _create_report(db=db)
@@ -70,6 +73,7 @@ def create_report_and_enqueue(
 
 def complete_report(db: Session, *, report_id: str, result: dict) -> Report:
     """Mark a pending report as ready and persist the result."""
+
     with tx(db):
         report = repo.get_for_update(db, id=report_id)
         if report is None:
