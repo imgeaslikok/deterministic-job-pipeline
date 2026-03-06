@@ -18,6 +18,8 @@ from . import repository as repo
 from .enums import OutboxStatus
 from .events import JOB_DISPATCH_REQUESTED
 from .models import OutboxEvent
+from .exceptions import UnsupportedOutboxEventType
+
 
 JobDispatch = Callable[[str, str | None], None]
 
@@ -31,7 +33,7 @@ def _backoff_delay_seconds(retry_count: int) -> int:
 
 def _is_terminal_publish_error(exc: Exception) -> bool:
     """Return whether a publish failure should not be retried."""
-    return isinstance(exc, ValueError)
+    return isinstance(exc, UnsupportedOutboxEventType)
 
 
 def create_event(
@@ -121,7 +123,7 @@ def publish_pending_events(
                     payload.get("request_id"),
                 )
             else:
-                raise ValueError(f"Unsupported outbox event type: {event.event_type}")
+                raise UnsupportedOutboxEventType(event.event_type)
 
             update_event(
                 db,
