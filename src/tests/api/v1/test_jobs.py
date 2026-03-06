@@ -1,3 +1,10 @@
+"""
+API tests for job endpoints.
+
+Covers job retrieval, attempt history inspection, DLQ listing,
+and retrying jobs through the HTTP API.
+"""
+
 from http import HTTPStatus
 
 from src.jobs.enums import JobStatus

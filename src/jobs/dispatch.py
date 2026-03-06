@@ -1,3 +1,9 @@
+"""
+Job dispatch helpers.
+
+Responsible for sending jobs to the background worker.
+"""
+
 from __future__ import annotations
 
 from src.config.settings import settings

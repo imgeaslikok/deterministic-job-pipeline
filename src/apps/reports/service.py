@@ -1,3 +1,9 @@
+"""
+Application service for the reports domain.
+
+Handles report lifecycle orchestration and integrates with the jobs system.
+"""
+
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
@@ -16,7 +22,7 @@ from .models import Report
 
 
 def _create_report_row(db: Session) -> Report:
-    """Create and persist a report row in pending state."""
+    """Create and persist a new report in pending state."""
 
     report = Report(status=ReportStatus.PENDING)
     repo.create(db, report=report)
@@ -27,7 +33,7 @@ def _attach_job_to_report(db: Session, *, report_id: str, job_id: str) -> Report
     """
     Attach a job to a report.
 
-    Idempotent when the same job is already attached.
+    Idempotent if the same job is already attached.
     Raises if a different job is already attached.
     """
 
@@ -56,12 +62,7 @@ def create_report(
     request_id: str | None,
 ) -> Report:
     """
-    Create a report and start its background generation flow.
-
-    Orchestration:
-        1. create report row
-        2. submit generation job
-        3. attach job to report
+    Create a report and submit its generation job.
     """
 
     from src.jobs import service as jobs_service
@@ -91,7 +92,9 @@ def get_report(db: Session, *, report_id: str) -> Report:
 
 
 def complete_report(db: Session, *, report_id: str, result: dict) -> Report:
-    """Mark a pending report as ready and persist its result."""
+    """
+    Mark a report as ready and persist its result.
+    """
 
     with tx(db):
         report = repo.get_for_update(db, id=report_id)

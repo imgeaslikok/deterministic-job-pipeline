@@ -1,3 +1,9 @@
+"""
+Tests for the reports job executor.
+
+Covers the report generation flow and executor error behavior.
+"""
+
 import pytest
 
 from src.apps.reports.enums import ReportStatus
@@ -31,6 +37,7 @@ def test_report_generation_flow_completes_job_and_report(
 
 
 def test_generate_report_missing_report_is_non_retryable(db_session):
+    """Missing report should raise a non-retryable executor error."""
     ctx = JobContext(db=db_session, job_id="j1", attempt_no=1, request_id=None)
 
     with pytest.raises(NonRetryableJobError):

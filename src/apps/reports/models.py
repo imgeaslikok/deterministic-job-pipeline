@@ -1,3 +1,7 @@
+"""
+SQLAlchemy model for reports.
+"""
+
 from sqlalchemy import JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,6 +13,8 @@ from .enums import ReportStatus
 
 
 class Report(IdMixin, TimestampMixin, Base):
+    """Database model representing a report."""
+
     __tablename__ = "reports"
 
     status: Mapped[str] = mapped_column(

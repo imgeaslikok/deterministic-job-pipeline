@@ -1,3 +1,9 @@
+"""
+Jobs API endpoints.
+
+Provides inspection and operational controls for background jobs.
+"""
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 

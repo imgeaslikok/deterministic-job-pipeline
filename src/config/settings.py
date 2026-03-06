@@ -1,7 +1,5 @@
 """
 Application configuration.
-
-Loads environment variables via pydantic-settings.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

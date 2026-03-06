@@ -1,3 +1,10 @@
+"""
+Test factories for creating jobs and reports.
+
+Provides helpers to create domain objects and execute jobs
+deterministically during tests.
+"""
+
 from __future__ import annotations
 
 from typing import Any

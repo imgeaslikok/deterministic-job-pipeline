@@ -1,3 +1,9 @@
+"""
+Tests for the transactional outbox workflow.
+
+Verifies event creation and publishing behavior.
+"""
+
 from __future__ import annotations
 
 from sqlalchemy import select
@@ -12,6 +18,7 @@ from src.tests.utils import generate_idempotency_key
 
 
 def test_submit_job_creates_pending_outbox_event(db_session):
+    """Submitting a job should create a pending outbox dispatch event."""
     job = submit_job(
         db_session,
         job_type="demo.outbox",
@@ -38,6 +45,7 @@ def test_submit_job_creates_pending_outbox_event(db_session):
 
 
 def test_publish_pending_events_dispatches_and_marks_event_published(db_session):
+    """Publishing events should dispatch the job and mark the event as published."""
     dispatched: list[tuple[str, str | None]] = []
 
     job = submit_job(
@@ -76,6 +84,7 @@ def test_publish_pending_events_dispatches_and_marks_event_published(db_session)
 
 
 def test_publish_pending_events_marks_event_failed_when_dispatch_fails(db_session):
+    """Failed dispatch should mark the outbox event as failed."""
     job = submit_job(
         db_session,
         job_type="demo.outbox.publish.failed",

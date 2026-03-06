@@ -1,10 +1,8 @@
 """
-Database engine and session configuration.
+Database engine and session setup.
 
-Provides:
-- SQLAlchemy engine
-- Session factory
-- FastAPI dependency for DB session management
+Provides the SQLAlchemy engine, session factory, and FastAPI
+dependency for database sessions.
 """
 
 from sqlalchemy import create_engine
@@ -25,9 +23,7 @@ SessionLocal = sessionmaker(
 
 def get_db():
     """
-    FastAPI dependency that provides a scoped database session.
-
-    Ensures the session is properly closed after request lifecycle.
+    Provide a database session for FastAPI requests.
     """
     db = SessionLocal()
     try:

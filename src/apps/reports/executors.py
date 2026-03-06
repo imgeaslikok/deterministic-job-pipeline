@@ -1,3 +1,7 @@
+"""
+Report generation job executor.
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -16,6 +20,7 @@ from .service import complete_report
 
 
 def _require_payload_str(payload: dict[str, Any], key: str) -> str:
+    """Return a required string field from the job payload."""
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
         raise NonRetryableJobError(f"Missing/invalid '{key}' in payload")
@@ -23,6 +28,7 @@ def _require_payload_str(payload: dict[str, Any], key: str) -> str:
 
 
 def _build_result(*, report_id: str, ctx: JobContext) -> dict[str, Any]:
+    """Build the demo report result payload."""
     return {
         "report_id": report_id,
         "generated_at": now_utc().isoformat(),
@@ -39,7 +45,9 @@ def _build_result(*, report_id: str, ctx: JobContext) -> dict[str, Any]:
 
 @register(REPORT_GENERATE)
 def generate_report(ctx: JobContext, payload: dict[str, Any]) -> ExecutionResult:
-    """Generate a demo report and persist the result."""
+    """
+    Generate a demo report and persist the result.
+    """
 
     report_id = _require_payload_str(payload, "report_id")
     result = _build_result(report_id=report_id, ctx=ctx)

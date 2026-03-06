@@ -1,3 +1,10 @@
+"""
+Shared pytest fixtures for reports integration tests.
+
+Provides database sessions, executor registry isolation,
+and helpers for loading reports and jobs from the database.
+"""
+
 import importlib
 
 import pytest

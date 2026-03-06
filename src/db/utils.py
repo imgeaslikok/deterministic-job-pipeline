@@ -1,3 +1,7 @@
+"""
+Database utility helpers.
+"""
+
 import time
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -9,11 +13,10 @@ def wait_for_db(
     engine: Engine, *, max_attempts: int = 30, sleep_seconds: float = 1.0
 ) -> None:
     """
-    Wait until the database is reachable.
-    Useful for Docker Compose where Postgres may start after the API container.
+    Wait until the database becomes reachable.
 
-    Raises:
-        RuntimeError: if DB is not reachable within max_attempts.
+    Retries a simple connection check until the database is ready
+    or the maximum number of attempts is reached.
     """
     last_exc: Exception | None = None
 
@@ -32,10 +35,9 @@ def wait_for_db(
 @contextmanager
 def tx(db) -> Iterator[Any]:
     """
-    Transaction boundary helper.
+    Provide a transaction boundary.
 
-    Ensures row locks (e.g. SELECT ... FOR UPDATE) are released promptly,
-    which is required for deterministic eager retry simulation.
+    Commits on success and rolls back on error.
     """
     try:
         yield

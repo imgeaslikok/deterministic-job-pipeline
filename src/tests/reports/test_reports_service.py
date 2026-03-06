@@ -1,3 +1,9 @@
+"""
+Tests for reports domain service helpers.
+
+Covers report creation, job attachment, and report completion logic.
+"""
+
 import pytest
 
 from src.apps.reports.enums import ReportStatus

@@ -1,3 +1,9 @@
+"""
+API tests for report endpoints.
+
+Covers report creation and error mapping for missing reports.
+"""
+
 from http import HTTPStatus
 
 from fastapi.testclient import TestClient

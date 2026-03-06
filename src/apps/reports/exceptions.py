@@ -1,3 +1,7 @@
+"""
+Reports domain exceptions.
+"""
+
 from __future__ import annotations
 
 
@@ -6,12 +10,16 @@ class ReportsError(Exception):
 
 
 class ReportNotFound(ReportsError):
+    """Raised when a report cannot be found."""
+
     def __init__(self, report_id: str):
         self.report_id = report_id
         super().__init__(f"Report not found: {report_id}")
 
 
 class InvalidReportState(ReportsError):
+    """Raised when an operation is not allowed for the report state."""
+
     def __init__(self, report_id: str, *, status: str):
         self.report_id = report_id
         self.status = status
@@ -19,6 +27,8 @@ class InvalidReportState(ReportsError):
 
 
 class ReportJobAlreadyAttached(ReportsError):
+    """Raised when a report already has a different job attached."""
+
     def __init__(self, report_id: str, *, existing_job_id: str, new_job_id: str):
         self.report_id = report_id
         self.existing_job_id = existing_job_id

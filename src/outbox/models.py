@@ -1,3 +1,7 @@
+"""
+SQLAlchemy model for transactional outbox events.
+"""
+
 from __future__ import annotations
 
 from sqlalchemy import JSON, String, Text

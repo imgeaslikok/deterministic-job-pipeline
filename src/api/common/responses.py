@@ -1,3 +1,7 @@
+"""
+Common API response helpers.
+"""
+
 from http import HTTPStatus
 
 from fastapi.responses import JSONResponse
@@ -5,13 +9,7 @@ from fastapi.responses import JSONResponse
 
 def error_response(status: HTTPStatus, *, detail: str, **extra) -> JSONResponse:
     """
-    Standard API error response.
-
-    Example response body:
-    {
-        "detail": "Report not found",
-        "report_id": "..."
-    }
+    Create a standard JSON error response.
     """
     return JSONResponse(
         status_code=status,

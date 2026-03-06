@@ -1,3 +1,9 @@
+"""
+Executor registry for job handlers.
+
+Maps job types to their registered executor functions.
+"""
+
 from __future__ import annotations
 
 from typing import Dict
@@ -12,8 +18,7 @@ def register_executor(job_type: str):
     """
     Register an executor for a job type.
 
-    Expected signature:
-        (ctx: JobContext, payload: dict[str, Any]) -> ExecutionResult | None
+    The executor must accept (ctx, payload) and return an ExecutionResult.
     """
 
     def decorator(fn: Executor) -> Executor:
@@ -26,6 +31,7 @@ def register_executor(job_type: str):
 
 
 def get_executor(job_type: str) -> Executor:
+    """Return the executor registered for a job type."""
     try:
         return _EXECUTORS[job_type]
     except KeyError as e:
@@ -33,7 +39,7 @@ def get_executor(job_type: str) -> Executor:
 
 
 def clear_registry() -> None:
-    """Testing helper."""
+    """Clear the executor registry (testing helper)."""
     _EXECUTORS.clear()
 
 

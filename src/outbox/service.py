@@ -1,3 +1,9 @@
+"""
+Application service for transactional outbox events.
+
+Handles event creation, state updates, and publishing.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -18,6 +24,7 @@ def create_event(
     event_type: str,
     payload: dict,
 ) -> OutboxEvent:
+    """Create a new outbox event."""
     return repo.create(
         db,
         event_type=event_type,
@@ -27,10 +34,12 @@ def create_event(
 
 
 def get_event(db: Session, *, event_id: str) -> OutboxEvent | None:
+    """Fetch an outbox event by id."""
     return repo.get(db, id=event_id)
 
 
 def list_pending_events(db: Session, *, limit: int = 100) -> list[OutboxEvent]:
+    """Return pending outbox events."""
     return repo.list_pending(db, limit=limit)
 
 
@@ -41,6 +50,7 @@ def update_event(
     status: OutboxStatus,
     error: str | None = None,
 ) -> OutboxEvent:
+    """Update the status of an outbox event."""
     event.status = status
     event.error = error
     return repo.save(db, event)
@@ -55,6 +65,7 @@ def publish_pending_events(
     """
     Publish pending outbox events.
 
+    Dispatches supported events and updates their status.
     Returns the number of successfully published events.
     """
     events = list_pending_events(db, limit=limit)

@@ -1,3 +1,7 @@
+"""
+Pydantic schemas for the jobs API.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,7 +13,7 @@ from src.jobs.models import JobStatus
 
 
 class JobResponse(BaseModel):
-    """API representation of a job (domain/ORM → response)."""
+    """API representation of a job."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -23,11 +27,12 @@ class JobResponse(BaseModel):
     @field_validator("status", mode="before")
     @classmethod
     def _status_to_str(cls, v: Any) -> str:
+        """Convert JobStatus enum values to strings."""
         return v.value if isinstance(v, JobStatus) else str(v)
 
 
 class JobAttemptResponse(BaseModel):
-    """API representation of a single attempt (audit trail entry)."""
+    """API representation of a job attempt."""
 
     model_config = ConfigDict(from_attributes=True)
 
