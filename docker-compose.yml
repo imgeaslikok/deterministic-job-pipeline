@@ -56,5 +56,22 @@ services:
     volumes:
       - ./:/code
 
+  beat:
+    build: .
+    command: celery -A src.config.celery.celery beat -l INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/app
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /code
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      api:
+        condition: service_started
+    volumes:
+      - ./:/code
+
 volumes:
   postgres_data:

@@ -18,6 +18,16 @@ def save(db: Session, obj: T) -> T:
     return obj
 
 
+def list_by_status(db: Session, *, status: JobStatus, limit: int = 50) -> list[Job]:
+    stmt = (
+        select(Job)
+        .where(Job.status == status)
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
 def get(db: Session, *, id: str) -> Job | None:
     return db.get(Job, id)
 

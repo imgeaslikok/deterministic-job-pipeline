@@ -1,7 +1,7 @@
 """
 Celery application configuration.
 
-Defines broker/backend and worker behavior.
+Defines broker/backend, worker behavior, and periodic schedules.
 """
 
 from celery import Celery
@@ -19,6 +19,12 @@ celery = Celery(
 celery.conf.update(
     task_acks_late=True,  # acknowledge after task execution
     worker_prefetch_multiplier=1,  # avoid task hoarding per worker
+    beat_schedule={
+        "publish-job-dispatch-events": {
+            "task": "src.jobs.tasks.publish_job_dispatch_events",
+            "schedule": 2.0,
+        },
+    },
 )
 
 # Test mode: run tasks synchronously

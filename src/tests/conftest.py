@@ -8,12 +8,6 @@ from src.jobs import repository as jobs_repo
 from src.jobs.registry import clear_registry
 
 
-@pytest.fixture(scope="session")
-def api_base() -> str:
-    """Base API prefix."""
-    return "/api/v1"
-
-
 @pytest.fixture()
 def db_session():
     """DB session per test."""

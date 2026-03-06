@@ -9,6 +9,7 @@ from src.core.enums import LogLevel
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
 from src.db.utils import tx
+from src.outbox import service as outbox_service
 
 from . import pipeline
 from .enums import AttemptStatus, JobEvent, JobStatus
@@ -179,4 +180,16 @@ def process_job(self, job_id: str) -> None:
         raise self.retry(
             exc=Exception(retry_reason or DEFAULT_RETRY_ERROR_MESSAGE),
             countdown=countdown,
+        )
+
+
+@celery.task
+def publish_job_dispatch_events() -> int:
+
+    from .dispatch import dispatch_job
+
+    with SessionLocal() as db:
+        return outbox_service.publish_pending_events(
+            db,
+            dispatch_job=dispatch_job,
         )

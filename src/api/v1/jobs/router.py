@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from src.db.session import get_db
 from src.jobs import service as jobs_service
 
-from .schemas import JobAttemptResponse, JobCreateRequest, JobResponse
+from .schemas import JobAttemptResponse, JobResponse
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -18,19 +18,6 @@ def list_dlq(
     return [
         JobResponse.model_validate(j) for j in jobs_service.list_dlq(db=db, limit=limit)
     ]
-
-
-@router.post("", response_model=JobResponse)
-def create_job(
-    req: JobCreateRequest,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    db: Session = Depends(get_db),
-) -> JobResponse:
-    """Create a job and enqueue it for processing."""
-    job = jobs_service.create_job(
-        db=db, type=req.type, payload=req.payload, idempotency_key=idempotency_key
-    )
-    return JobResponse.model_validate(job)
 
 
 @router.get("/{id}", response_model=JobResponse)

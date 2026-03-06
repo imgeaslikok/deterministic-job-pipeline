@@ -3,16 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from src.jobs.models import JobStatus
-
-
-class JobCreateRequest(BaseModel):
-    """API request payload for creating a job."""
-
-    type: str = Field(min_length=1, max_length=64)
-    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobResponse(BaseModel):
@@ -21,7 +14,8 @@ class JobResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    status: str  # keep as string for API stability
+    job_type: str
+    status: str
     attempts: int
     last_error: str | None = None
     result: dict[str, Any] | None = None
@@ -37,6 +31,7 @@ class JobAttemptResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    job_id: str
     attempt_no: int
     status: str
     error: str | None = None
