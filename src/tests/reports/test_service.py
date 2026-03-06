@@ -7,15 +7,15 @@ from src.apps.reports.exceptions import (
     ReportNotFound,
 )
 from src.apps.reports.service import (
-    _attach_job,
-    _create_report,
+    _attach_job_to_report,
+    _create_report_row,
     complete_report,
 )
 
 
 def test_create_report_creates_pending_row(db_session, get_report):
     """Creating a report should persist a pending report with no job attached."""
-    report = _create_report(db_session)
+    report = _create_report_row(db_session)
     db_session.commit()
 
     report2 = get_report(report.id)
@@ -26,10 +26,10 @@ def test_create_report_creates_pending_row(db_session, get_report):
 
 def test_attach_job_sets_job_id(db_session, get_report):
     """Attaching a job should set the job_id on the report."""
-    report = _create_report(db_session)
+    report = _create_report_row(db_session)
     db_session.commit()
 
-    _attach_job(db_session, report_id=report.id, job_id="job-123")
+    _attach_job_to_report(db_session, report_id=report.id, job_id="job-123")
     db_session.commit()
 
     report2 = get_report(report.id)
@@ -40,24 +40,24 @@ def test_attach_job_sets_job_id(db_session, get_report):
 def test_attach_job_missing_report_raises(db_session):
     """Attaching a job to a missing report should raise ReportNotFound."""
     with pytest.raises(ReportNotFound):
-        _attach_job(db_session, report_id="missing", job_id="job-1")
+        _attach_job_to_report(db_session, report_id="missing", job_id="job-1")
 
 
 def test_attach_job_conflicting_job_raises(db_session):
     """Attaching a different job to the same report should raise ReportJobAlreadyAttached."""
-    report = _create_report(db_session)
+    report = _create_report_row(db_session)
     db_session.commit()
 
-    _attach_job(db_session, report_id=report.id, job_id="job-1")
+    _attach_job_to_report(db_session, report_id=report.id, job_id="job-1")
     db_session.commit()
 
     with pytest.raises(ReportJobAlreadyAttached):
-        _attach_job(db_session, report_id=report.id, job_id="job-2")
+        _attach_job_to_report(db_session, report_id=report.id, job_id="job-2")
 
 
 def test_complete_report_sets_ready_and_result(db_session, get_report):
     """Completing a report should mark it ready and persist the result payload."""
-    report = _create_report(db_session)
+    report = _create_report_row(db_session)
     db_session.commit()
 
     result = {"url": "s3://bucket/x.pdf"}
@@ -72,7 +72,7 @@ def test_complete_report_sets_ready_and_result(db_session, get_report):
 
 def test_complete_report_invalid_state_raises(db_session):
     """Completing a report twice should raise InvalidReportState."""
-    report = _create_report(db_session)
+    report = _create_report_row(db_session)
     db_session.commit()
 
     complete_report(db_session, report_id=report.id, result={"ok": True})
