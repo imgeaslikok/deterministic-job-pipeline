@@ -65,13 +65,17 @@ def publish_pending_events(
     """
     Publish pending outbox events.
 
-    Dispatches supported events and updates their status.
-    Returns the number of successfully published events.
+    Claims pending events one by one under row locks, dispatches supported
+    events, and updates their status. Returns the number of successfully
+    published events.
     """
-    events = list_pending_events(db, limit=limit)
     published_count = 0
 
-    for event in events:
+    while published_count < limit:
+        event = repo.claim_next_pending(db)
+        if event is None:
+            break
+
         try:
             if event.event_type == JOB_DISPATCH_REQUESTED:
                 payload = event.payload or {}

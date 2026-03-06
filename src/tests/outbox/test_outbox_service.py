@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from src.db.session import SessionLocal
 from src.jobs.service import submit_job
 from src.outbox import repository as repo
 from src.outbox.enums import OutboxStatus
@@ -117,3 +118,71 @@ def test_publish_pending_events_marks_event_failed_when_dispatch_fails(db_sessio
     assert published_count == 0
     assert event.status == OutboxStatus.FAILED
     assert event.error == "dispatch failed"
+
+
+def test_publish_pending_events_skips_locked_events_and_publishes_next(db_session):
+    """Publishing should skip locked pending events and publish the next available one."""
+    first_job = submit_job(
+        db_session,
+        job_type="demo.outbox.locked.first",
+        payload={},
+        idempotency_key=generate_idempotency_key("outbox-locked-first"),
+        request_id="req-first",
+    )
+    second_job = submit_job(
+        db_session,
+        job_type="demo.outbox.locked.second",
+        payload={},
+        idempotency_key=generate_idempotency_key("outbox-locked-second"),
+        request_id="req-second",
+    )
+    db_session.commit()
+
+    dispatched: list[tuple[str, str | None]] = []
+
+    def fake_dispatch(job_id: str, request_id: str | None) -> None:
+        dispatched.append((job_id, request_id))
+
+    lock_session = SessionLocal()
+    publish_session = SessionLocal()
+
+    try:
+        locked_event = repo.claim_next_pending(lock_session)
+        assert locked_event is not None
+        assert (locked_event.payload or {}).get("job_id") == first_job.id
+
+        published_count = publish_pending_events(
+            publish_session,
+            dispatch_job=fake_dispatch,
+            limit=10,
+        )
+
+        publish_session.expire_all()
+
+        stmt = select(OutboxEvent)
+        events = list(publish_session.execute(stmt).scalars().all())
+
+        first_event = next(
+            e
+            for e in events
+            if e.event_type == JOB_DISPATCH_REQUESTED
+            and (e.payload or {}).get("job_id") == first_job.id
+        )
+        second_event = next(
+            e
+            for e in events
+            if e.event_type == JOB_DISPATCH_REQUESTED
+            and (e.payload or {}).get("job_id") == second_job.id
+        )
+
+        assert published_count == 1
+        assert (second_job.id, "req-second") in dispatched
+        assert (first_job.id, "req-first") not in dispatched
+        assert first_event.status == OutboxStatus.PENDING
+        assert second_event.status == OutboxStatus.PUBLISHED
+        assert second_event.error is None
+
+    finally:
+        lock_session.rollback()
+        lock_session.close()
+        publish_session.close()

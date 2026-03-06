@@ -52,3 +52,15 @@ def list_pending(db: Session, *, limit: int = 100) -> list[OutboxEvent]:
         .limit(limit)
     )
     return list(db.execute(stmt).scalars().all())
+
+
+def claim_next_pending(db: Session) -> OutboxEvent | None:
+    """Return the next pending outbox event under a row lock."""
+    stmt = (
+        select(OutboxEvent)
+        .where(OutboxEvent.status == OutboxStatus.PENDING)
+        .order_by(OutboxEvent.created_at.asc(), OutboxEvent.id.asc())
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
