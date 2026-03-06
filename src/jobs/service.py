@@ -9,6 +9,7 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.db.utils import tx
 from src.outbox import service as outbox_service
 from src.outbox.events import JOB_DISPATCH_REQUESTED
 
@@ -45,8 +46,6 @@ def submit_job(
         },
     )
 
-    db.commit()
-    db.refresh(job)
     return job
 
 
@@ -67,27 +66,26 @@ def retry_from_dlq(db: Session, *, id: str, request_id: str | None = None) -> Jo
     """
     Reset a dead job to pending and enqueue it again via the outbox.
     """
-    job = get_job(db, id=id)
-    if job.status != JobStatus.DEAD:
-        raise InvalidJobState(job_id=job.id, status=job.status.value)
+    with tx(db):
+        job = get_job(db, id=id)
+        if job.status != JobStatus.DEAD:
+            raise InvalidJobState(job_id=job.id, status=job.status.value)
 
-    job.status = JobStatus.PENDING
-    job.last_error = None
-    job.result = None
-    repo.save(db, job)
+        job.status = JobStatus.PENDING
+        job.last_error = None
+        job.result = None
+        repo.save(db, job)
 
-    outbox_service.create_event(
-        db,
-        event_type=JOB_DISPATCH_REQUESTED,
-        payload={
-            "job_id": job.id,
-            "request_id": request_id,
-        },
-    )
+        outbox_service.create_event(
+            db,
+            event_type=JOB_DISPATCH_REQUESTED,
+            payload={
+                "job_id": job.id,
+                "request_id": request_id,
+            },
+        )
 
-    db.commit()
-    db.refresh(job)
-    return job
+        return job
 
 
 def list_attempts(db: Session, *, job_id: str):
