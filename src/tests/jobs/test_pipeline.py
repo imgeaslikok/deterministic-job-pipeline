@@ -10,8 +10,8 @@ from src.jobs.exceptions import (
 )
 from src.jobs.registry import register
 from src.jobs.service import submit_job
-from src.jobs.tasks import process_job
 from src.jobs.types import ExecutionResult
+from src.tests.factories import run_job
 from src.tests.utils import generate_idempotency_key
 
 
@@ -30,7 +30,7 @@ def test_success_path_creates_attempt_and_completes(db_session, get_job):
     )
     db_session.commit()  # worker task uses a separate session
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None
@@ -60,7 +60,7 @@ def test_retryable_error_retries_and_eventually_completes(db_session, get_job):
     )
     db_session.commit()
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None
@@ -86,7 +86,7 @@ def test_non_retryable_error_moves_to_dlq(db_session, get_job):
     )
     db_session.commit()
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None
@@ -150,7 +150,6 @@ def test_idempotency_key_conflict_raises(db_session):
 
 def test_missing_executor_moves_to_dlq_and_writes_attempt(db_session, get_job):
     """Missing executor should move the job to dead and record a failed attempt."""
-
     job = submit_job(
         db_session,
         job_type="demo.missing-executor",
@@ -159,7 +158,7 @@ def test_missing_executor_moves_to_dlq_and_writes_attempt(db_session, get_job):
     )
     db_session.commit()
 
-    process_job.apply(args=(job.id,), throw=True)
+    run_job(job_id=job.id)
 
     job2 = get_job(job.id)
     assert job2 is not None

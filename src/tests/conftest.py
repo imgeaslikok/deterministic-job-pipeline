@@ -5,6 +5,7 @@ import pytest
 from src.apps.reports import repository as reports_repo
 from src.db.session import SessionLocal
 from src.jobs import repository as jobs_repo
+from src.jobs.registry import clear_registry
 
 
 @pytest.fixture(scope="session")
@@ -26,11 +27,9 @@ def db_session():
 @pytest.fixture(autouse=True)
 def _reset_registry():
     """Keep executor registry clean between tests."""
-    import src.jobs.registry as registry
-
-    registry._EXECUTORS.clear()  # type: ignore[attr-defined]
+    clear_registry()
     yield
-    registry._EXECUTORS.clear()  # type: ignore[attr-defined]
+    clear_registry()
 
 
 @pytest.fixture()
