@@ -131,11 +131,7 @@ def process_job(self, job_id: str) -> None:
                     job_status = JobStatus.PENDING
 
                     if current_retries >= max_retries:
-                        pipeline.move_to_dead(
-                            db,
-                            job_id=job_id,
-                            error=dlq_max_retries_error(error),
-                        )
+                        error = dlq_max_retries_error(error)
                         job_status = JobStatus.DEAD
                         event, level, detail = (
                             JobEvent.MOVED_TO_DLQ,

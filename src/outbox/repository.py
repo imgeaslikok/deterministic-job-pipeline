@@ -4,9 +4,10 @@ Repository helpers for transactional outbox events.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .enums import OutboxStatus
@@ -52,3 +53,25 @@ def list_pending(db: Session, *, limit: int = 100) -> list[OutboxEvent]:
         .limit(limit)
     )
     return list(db.execute(stmt).scalars().all())
+
+
+def claim_next_pending(
+    db: Session,
+    *,
+    now: datetime,
+) -> OutboxEvent | None:
+    """Return the next publishable outbox event under a row lock."""
+    stmt = (
+        select(OutboxEvent)
+        .where(OutboxEvent.status == OutboxStatus.PENDING)
+        .where(
+            or_(
+                OutboxEvent.next_attempt_at.is_(None),
+                OutboxEvent.next_attempt_at <= now,
+            )
+        )
+        .order_by(OutboxEvent.created_at.asc(), OutboxEvent.id.asc())
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()

@@ -7,8 +7,11 @@ Handles event creation, state updates, and publishing.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
+
+from src.core.utils import now_utc
 
 from . import repository as repo
 from .enums import OutboxStatus
@@ -16,6 +19,18 @@ from .events import JOB_DISPATCH_REQUESTED
 from .models import OutboxEvent
 
 JobDispatch = Callable[[str, str | None], None]
+
+MAX_PUBLISH_RETRIES = 5
+
+
+def _backoff_delay_seconds(retry_count: int) -> int:
+    """Return the delay before the next publish attempt."""
+    return 30 * retry_count
+
+
+def _is_terminal_publish_error(exc: Exception) -> bool:
+    """Return whether a publish failure should not be retried."""
+    return isinstance(exc, ValueError)
 
 
 def create_event(
@@ -49,10 +64,31 @@ def update_event(
     event: OutboxEvent,
     status: OutboxStatus,
     error: str | None = None,
+    published_at: datetime | None = None,
 ) -> OutboxEvent:
     """Update the status of an outbox event."""
     event.status = status
     event.error = error
+    event.published_at = published_at
+    event.next_attempt_at = None
+    return repo.save(db, event)
+
+
+def schedule_retry(
+    db: Session,
+    *,
+    event: OutboxEvent,
+    error: str,
+    now: datetime,
+) -> OutboxEvent:
+    """Schedule a retry for a transient publish failure."""
+    event.status = OutboxStatus.PENDING
+    event.error = error
+    event.retry_count = int(event.retry_count or 0) + 1
+    event.published_at = None
+    event.next_attempt_at = now + timedelta(
+        seconds=_backoff_delay_seconds(event.retry_count)
+    )
     return repo.save(db, event)
 
 
@@ -65,13 +101,17 @@ def publish_pending_events(
     """
     Publish pending outbox events.
 
-    Dispatches supported events and updates their status.
-    Returns the number of successfully published events.
+    Claims pending events one by one under row locks, dispatches supported
+    events, and updates their status. Returns the number of successfully
+    published events.
     """
-    events = list_pending_events(db, limit=limit)
     published_count = 0
 
-    for event in events:
+    while published_count < limit:
+        event = repo.claim_next_pending(db, now=now_utc())
+        if event is None:
+            break
+
         try:
             if event.event_type == JOB_DISPATCH_REQUESTED:
                 payload = event.payload or {}
@@ -82,7 +122,12 @@ def publish_pending_events(
             else:
                 raise ValueError(f"Unsupported outbox event type: {event.event_type}")
 
-            update_event(db, event=event, status=OutboxStatus.PUBLISHED)
+            update_event(
+                db,
+                event=event,
+                status=OutboxStatus.PUBLISHED,
+                published_at=now_utc(),
+            )
             db.commit()
             published_count += 1
 
@@ -93,12 +138,24 @@ def publish_pending_events(
             if refreshed is None:
                 raise
 
-            update_event(
-                db,
-                event=refreshed,
-                status=OutboxStatus.FAILED,
-                error=str(exc),
-            )
+            error = str(exc)
+            retry_count = int(refreshed.retry_count or 0)
+
+            if _is_terminal_publish_error(exc) or retry_count >= MAX_PUBLISH_RETRIES:
+                update_event(
+                    db,
+                    event=refreshed,
+                    status=OutboxStatus.FAILED,
+                    error=error,
+                )
+            else:
+                schedule_retry(
+                    db,
+                    event=refreshed,
+                    error=error,
+                    now=now_utc(),
+                )
+
             db.commit()
 
     return published_count

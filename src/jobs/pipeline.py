@@ -72,11 +72,11 @@ def finalize_attempt(
     """
     Finalize an attempt and update the job state.
 
-    Updates both the immutable attempt row and the current job snapshot
-    within the active transaction.
+    Applies both the immutable attempt update and the current job snapshot
+    update within the active transaction.
     """
     job = repo.get_for_update(db, id=job_id)
-    if not job or _is_terminal(job.status):
+    if not job:
         return
 
     attempt = repo.get_attempt(db, job_id=job.id, attempt_no=attempt_no)
@@ -97,14 +97,4 @@ def finalize_attempt(
     job.last_error = error
     if result is not None:
         job.result = result
-    repo.save(db, job)
-
-
-def move_to_dead(db: Session, *, job_id: str, error: str) -> None:
-    """Move a job to the DLQ state."""
-    job = repo.get_for_update(db, id=job_id)
-    if not job or _is_terminal(job.status):
-        return
-    job.status = JobStatus.DEAD
-    job.last_error = error
     repo.save(db, job)
