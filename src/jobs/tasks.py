@@ -13,6 +13,7 @@ from src.config.celery import celery
 from src.config.settings import settings
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
+from src.core.logging import build_log_extra
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
 from src.db.utils import tx
@@ -35,9 +36,6 @@ def _load_executors() -> None:
         import_module(module_path)
 
 
-_load_executors()
-
-
 def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
     """
     Emit structured job pipeline logs through the task logger.
@@ -46,10 +44,41 @@ def _task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
     logger = getattr(task, "logger", None)
     if not logger:
         return
-    msg = f"[jobs] {event.value} " + " ".join(
-        f"{k}={v}" for k, v in fields.items() if v is not None
+
+    extra = build_log_extra(
+        component="jobs.worker",
+        event=event.value,
+        **fields,
     )
-    getattr(logger, level.value, logger.info)(msg)
+    getattr(logger, level.value, logger.info)(event.value, extra=extra)
+
+
+def _classify_execution_error(
+    exc: Exception,
+    *,
+    current_retries: int,
+    max_retries: int,
+) -> tuple[JobStatus, JobEvent, LogLevel, str, bool]:
+    """
+    Classify a job execution error into a retry or DLQ outcome.
+    """
+
+    error = str(exc)
+
+    if isinstance(exc, (ExecutorNotRegistered, NonRetryableJobError)):
+        return JobStatus.DEAD, JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error, False
+
+    if isinstance(exc, RetryableJobError):
+        if current_retries >= max_retries:
+            error = dlq_max_retries_error(error)
+            return JobStatus.DEAD, JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error, False
+
+        return JobStatus.PENDING, JobEvent.RETRY_NEEDED, LogLevel.WARNING, error, True
+
+    raise exc
+
+
+_load_executors()
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=2)
@@ -73,6 +102,7 @@ def process_job(self, job_id: str) -> None:
             LogLevel.INFO,
             JobEvent.ATTEMPT_BEGIN,
             job_id=job_id,
+            request_id=request_id,
             retries=current_retries,
         )
 
@@ -99,7 +129,10 @@ def process_job(self, job_id: str) -> None:
                 attempt_no = begin.attempt_no
 
                 ctx = JobContext(
-                    db=db, job_id=job_id, attempt_no=attempt_no, request_id=request_id
+                    db=db,
+                    job_id=job_id,
+                    attempt_no=attempt_no,
+                    request_id=request_id,
                 )
 
                 attempt_status: AttemptStatus = AttemptStatus.FAILED
@@ -117,34 +150,25 @@ def process_job(self, job_id: str) -> None:
                     attempt_status = AttemptStatus.SUCCEEDED
                     job_status = JobStatus.COMPLETED
 
-                except ExecutorNotRegistered as e:
-                    error = str(e)
-                    event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
-
-                except NonRetryableJobError as e:
-                    error = str(e)
-                    event, level, detail = JobEvent.MOVED_TO_DLQ, LogLevel.ERROR, error
-
-                except RetryableJobError as e:
-                    error = str(e)
-                    job_status = JobStatus.PENDING
-
-                    if current_retries >= max_retries:
-                        error = dlq_max_retries_error(error)
-                        job_status = JobStatus.DEAD
-                        event, level, detail = (
-                            JobEvent.MOVED_TO_DLQ,
-                            LogLevel.ERROR,
-                            error,
-                        )
-                    else:
-                        need_retry = True
+                except (
+                    ExecutorNotRegistered,
+                    NonRetryableJobError,
+                    RetryableJobError,
+                ) as exc:
+                    (
+                        job_status,
+                        event,
+                        level,
+                        error,
+                        need_retry,
+                    ) = _classify_execution_error(
+                        exc,
+                        current_retries=current_retries,
+                        max_retries=max_retries,
+                    )
+                    detail = error
+                    if need_retry:
                         retry_reason = error
-                        event, level, detail = (
-                            JobEvent.RETRY_NEEDED,
-                            LogLevel.WARNING,
-                            error,
-                        )
 
                 finally:
                     finished_at = now_utc()
@@ -160,7 +184,13 @@ def process_job(self, job_id: str) -> None:
                     )
 
         _task_log(
-            self, level, event, job_id=job_id, attempt_no=attempt_no, detail=detail
+            self,
+            level,
+            event,
+            job_id=job_id,
+            attempt_no=attempt_no,
+            request_id=request_id,
+            detail=detail,
         )
 
         if not need_retry:
@@ -173,6 +203,7 @@ def process_job(self, job_id: str) -> None:
                 JobEvent.RETRY_EAGER_SIMULATED,
                 job_id=job_id,
                 attempt_no=attempt_no,
+                request_id=request_id,
                 detail=retry_reason,
             )
             return self.apply(args=(job_id,), throw=True, retries=current_retries + 1)
@@ -186,6 +217,7 @@ def process_job(self, job_id: str) -> None:
             attempt_no=attempt_no,
             retries=current_retries,
             countdown=countdown,
+            request_id=request_id,
             detail=retry_reason,
         )
         raise self.retry(
@@ -199,6 +231,7 @@ def publish_job_dispatch_events() -> int:
     """
     Publish pending job dispatch events from the outbox.
     """
+
     from . import publish
 
     return publish.publish_outbox_job_dispatch_events()
