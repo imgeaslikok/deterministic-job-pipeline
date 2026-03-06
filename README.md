@@ -1,8 +1,8 @@
 # FastAPI Deterministic Job Pipeline
 
-This project implements a deterministic background job processing pipeline using **FastAPI**, **Celery**, and **PostgreSQL**.
+This project implements a deterministic background job processing pipeline using **FastAPI**, **Celery**, **PostgreSQL**, and a **Transactional Outbox** for reliable dispatch.
 
-The goal is not only to execute background tasks but to demonstrate how to build a **production-grade job orchestration system** with deterministic execution, retry safety, and clear domain separation.
+The goal is not only to execute background tasks but to demonstrate how to build a **production-grade job orchestration system** with deterministic execution, retry safety, and reliable job dispatch.
 
 The pipeline is domain-agnostic and can be reused by multiple application domains.
 
@@ -12,39 +12,96 @@ A simple **report generation domain** is included as an example.
 
 # Architecture Overview
 
-The system is built around a transactional job pipeline that guarantees consistent job execution.
+The system is built around a transactional job pipeline with **reliable job dispatch** using the **Transactional Outbox Pattern**.
 
 Core components:
 
 ```
-Client → FastAPI → Job Submission → Celery Queue → Worker → Job Executor → Domain Update
+
+Client
+↓
+FastAPI
+↓
+Application Service
+↓
+Job + Outbox Event (single DB transaction)
+↓
+Outbox Publisher (Celery Beat)
+↓
+Job Dispatcher
+↓
+Celery Worker
+↓
+Job Executor
+↓
+Domain Update
+
 ```
 
 All job state transitions are persisted in the database and executed under explicit transaction boundaries.
 
 ---
 
-# Design Goals
+# Reliable Job Dispatch (Transactional Outbox)
 
-The system is designed to address common problems found in background job systems.
+Traditional async systems often suffer from the classic reliability gap:
 
-## Deterministic Job Execution
+```
+
+DB commit → enqueue job
+
+```
+
+If enqueue fails after the commit, the job may **never execute**.
+
+This project solves that using the **Transactional Outbox Pattern**.
+
+During job submission:
+
+```
+
+BEGIN TX
+insert job
+insert outbox_event
+COMMIT
+
+```
+
+A periodic publisher then dispatches pending events.
+
+```
+
+Celery Beat → Outbox Publisher → Job Dispatcher → Celery Worker
+
+```
+
+This guarantees:
+
+* reliable dispatch
+* retryable publishing
+* no lost jobs
+
+---
+
+# Deterministic Job Execution
 
 Job execution is controlled entirely through database state.
 
 Typical lifecycle:
 
 ```
+
 pending → running → completed
                   → retry
                   → dead
+
 ```
 
 The state machine is enforced by the pipeline.
 
 ---
 
-## Retry Safety
+# Retry Safety
 
 Retry behavior ensures that jobs can be safely retried without duplicate side effects.
 
@@ -57,19 +114,21 @@ Features include:
 
 ---
 
-## Transaction Safety
+# Transaction Safety
 
 Each job attempt runs within a transactional boundary.
 
 Execution pattern:
 
 ```
+
 BEGIN TX
-  begin_attempt()
-  executor(ctx)
-  finalize_attempt()
+begin_attempt()
+executor(ctx)
+finalize_attempt()
 COMMIT
-```
+
+````
 
 This prevents:
 
@@ -79,7 +138,7 @@ This prevents:
 
 ---
 
-## Domain Isolation
+# Domain Isolation
 
 The job pipeline does not depend on any domain logic.
 
@@ -91,13 +150,13 @@ Example:
 @register("report.generate")
 def generate_report(ctx, payload):
     ...
-```
+````
 
 The worker resolves the executor at runtime using the registry.
 
 ---
 
-## Executor Registry
+# Executor Registry
 
 Job types are mapped to executors through a registry.
 
@@ -109,7 +168,7 @@ Executors are registered via decorators and loaded at worker startup.
 
 ---
 
-## Attempt Audit Trail
+# Attempt Audit Trail
 
 Each execution attempt is stored separately.
 
@@ -147,7 +206,12 @@ src/
     registry.py
     tasks.py
     service.py
+    dispatch.py
     repository.py
+  outbox/
+    service.py
+    repository.py
+    models.py
   db/
   config/
 ```
@@ -159,6 +223,7 @@ Responsibilities are separated across layers:
 | API            | HTTP interface            |
 | Domain         | business logic            |
 | Job pipeline   | job orchestration         |
+| Outbox         | reliable dispatch         |
 | Infrastructure | persistence and messaging |
 
 ---
@@ -166,6 +231,8 @@ Responsibilities are separated across layers:
 # Job Execution Flow
 
 Example flow for report generation.
+
+---
 
 ## 1. Client Request
 
@@ -187,22 +254,32 @@ pending
 
 ## 3. Job Submission
 
-A job is inserted into the jobs table.
+A job and an outbox event are created within the same transaction.
 
 ```
-type = report.generate
-status = pending
+job.status = pending
+outbox_event = job.dispatch.requested
 ```
 
 ---
 
-## 4. Queue Dispatch
+## 4. Outbox Publishing
 
-The job is sent to the Celery queue.
+A periodic publisher dispatches pending events.
+
+```
+Celery Beat → publish_job_dispatch_events
+```
 
 ---
 
-## 5. Worker Execution
+## 5. Job Dispatch
+
+The dispatcher enqueues the job to Celery.
+
+---
+
+## 6. Worker Execution
 
 The worker processes the job.
 
@@ -212,13 +289,13 @@ process_job(job_id)
 
 ---
 
-## 6. Attempt Start
+## 7. Attempt Start
 
 The pipeline creates a new attempt and moves the job to `running`.
 
 ---
 
-## 7. Executor Invocation
+## 8. Executor Invocation
 
 The registered executor is called.
 
@@ -228,7 +305,7 @@ generate_report(ctx, payload)
 
 ---
 
-## 8. Domain Update
+## 9. Domain Update
 
 The executor updates the report domain state.
 
@@ -238,13 +315,33 @@ report.status → ready
 
 ---
 
-## 9. Attempt Finalization
+## 10. Attempt Finalization
 
 The pipeline persists the final job state.
 
 ```
 completed
 ```
+
+---
+
+# Jobs API
+
+The system exposes endpoints for job inspection and operations.
+
+```
+GET  /api/v1/jobs/{id}
+GET  /api/v1/jobs/{id}/attempts
+GET  /api/v1/jobs/dlq
+POST /api/v1/jobs/{id}/retry
+```
+
+These endpoints allow:
+
+* job inspection
+* DLQ inspection
+* retrying dead jobs
+* attempt history visibility
 
 ---
 
@@ -267,6 +364,7 @@ The executor simulates generating a report and persists the result.
 
 The project demonstrates the following architectural patterns:
 
+* transactional outbox
 * deterministic job execution
 * retry orchestration
 * dead letter queue handling
@@ -275,6 +373,7 @@ The project demonstrates the following architectural patterns:
 * transactional job state machine
 * domain isolation
 * attempt auditing
+* API-level job observability
 
 ---
 
@@ -315,6 +414,7 @@ Coverage includes:
 * executor failure handling
 * domain invariants
 * API error mapping
+* outbox dispatch reliability
 
 Tests use:
 
@@ -322,9 +422,10 @@ Tests use:
 * httpx
 * transactional database fixtures
 
-
 ---
 
 # License
 
 MIT License
+
+
