@@ -3,29 +3,11 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.config.settings import settings
-from src.core.context import REQUEST_ID_HEADER
-
 from . import repository as repo
+from .dispatcher import get_job_dispatcher
 from .enums import JobStatus
 from .exceptions import IdempotencyKeyConflict, InvalidJobState, JobNotFound
 from .models import Job
-from .tasks import process_job
-
-
-def _enqueue_job(*, job_id: str, request_id: str | None) -> None:
-    """
-    Enqueue job for background processing.
-
-    In test environment we skip enqueue because tests
-    explicitly call process_job.apply(...).
-    """
-    if settings.environment == "test":
-        return
-
-    headers = {REQUEST_ID_HEADER: request_id} if request_id else None
-
-    process_job.apply_async(args=(job_id,), headers=headers)
 
 
 def submit_job(
@@ -44,7 +26,8 @@ def submit_job(
     )
     db.commit()
 
-    _enqueue_job(job_id=job.id, request_id=request_id)
+    dispatcher = get_job_dispatcher()
+    dispatcher.dispatch(job_id=job.id, request_id=request_id)
 
     db.refresh(job)
     return job
@@ -69,7 +52,8 @@ def retry_from_dlq(db: Session, *, job_id: str, request_id: str | None = None) -
     repo.save(db, job)
     db.commit()
 
-    _enqueue_job(job_id=job.id, request_id=request_id)
+    dispatcher = get_job_dispatcher()
+    dispatcher.dispatch(job_id=job.id, request_id=request_id)
 
     db.refresh(job)
     return job
