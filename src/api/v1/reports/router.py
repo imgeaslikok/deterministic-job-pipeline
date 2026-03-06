@@ -18,7 +18,7 @@ def create_report(
     request_id: str | None = Header(default=None, alias="X-Request-Id"),
     db: Session = Depends(get_db),
 ) -> ReportResponse:
-    report = reports_service.create_report_and_enqueue(
+    report = reports_service.create_report(
         db=db,
         idempotency_key=idempotency_key,
         request_id=request_id,

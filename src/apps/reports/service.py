@@ -15,50 +15,59 @@ from .job_types import REPORT_GENERATE
 from .models import Report
 
 
-def _create_report(db: Session) -> Report:
-    """Create a report row only (does not enqueue jobs)."""
+def _create_report_row(db: Session) -> Report:
+    """Create and persist a report row in pending state."""
 
-    with tx(db):
-        report = Report(status=ReportStatus.PENDING)
-        repo.create(db, report=report)
-        return report
-
-
-def _attach_job(db: Session, *, report_id: str, job_id: str) -> Report:
-    """Attach a job to a report (idempotent if already attached to the same job)."""
-
-    with tx(db):
-        report = repo.get_for_update(db, id=report_id)
-        if report is None:
-            raise ReportNotFound(report_id)
-
-        if report.job_id:
-            if report.job_id == job_id:
-                return report
-            raise ReportJobAlreadyAttached(
-                report_id, existing_job_id=report.job_id, new_job_id=job_id
-            )
-
-        report.job_id = job_id
-        repo.save(db, report)
-        return report
-
-
-def get_report(db: Session, *, report_id: str) -> Report:
-    report = repo.get(db, id=report_id)
-    if report is None:
-        raise ReportNotFound(report_id)
+    report = Report(status=ReportStatus.PENDING)
+    repo.create(db, report=report)
     return report
 
 
-def create_report_and_enqueue(
-    db: Session, *, idempotency_key: str | None, request_id: str | None
+def _attach_job_to_report(db: Session, *, report_id: str, job_id: str) -> Report:
+    """
+    Attach a job to a report.
+
+    Idempotent when the same job is already attached.
+    Raises if a different job is already attached.
+    """
+
+    report = repo.get_for_update(db, id=report_id)
+    if report is None:
+        raise ReportNotFound(report_id)
+
+    if report.job_id:
+        if report.job_id == job_id:
+            return report
+        raise ReportJobAlreadyAttached(
+            report_id=report_id,
+            existing_job_id=report.job_id,
+            new_job_id=job_id,
+        )
+
+    report.job_id = job_id
+    repo.save(db, report)
+    return report
+
+
+def create_report(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+    request_id: str | None,
 ) -> Report:
-    """Create a report and enqueue the corresponding job."""
+    """
+    Create a report and start its background generation flow.
+
+    Orchestration:
+        1. create report row
+        2. submit generation job
+        3. attach job to report
+    """
 
     from src.jobs import service as jobs_service
 
-    report = _create_report(db=db)
+    with tx(db):
+        report = _create_report_row(db)
 
     job = jobs_service.submit_job(
         db=db,
@@ -68,11 +77,21 @@ def create_report_and_enqueue(
         request_id=request_id,
     )
 
-    return _attach_job(db=db, report_id=report.id, job_id=job.id)
+    with tx(db):
+        return _attach_job_to_report(db, report_id=report.id, job_id=job.id)
+
+
+def get_report(db: Session, *, report_id: str) -> Report:
+    """Fetch a report by id."""
+
+    report = repo.get(db, id=report_id)
+    if report is None:
+        raise ReportNotFound(report_id)
+    return report
 
 
 def complete_report(db: Session, *, report_id: str, result: dict) -> Report:
-    """Mark a pending report as ready and persist the result."""
+    """Mark a pending report as ready and persist its result."""
 
     with tx(db):
         report = repo.get_for_update(db, id=report_id)
