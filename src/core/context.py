@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import contextvars
 
-REQUEST_ID_HEADER = "x_request_id"
+REQUEST_ID_HEADER = "x-request-id"
 
 
 _request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
