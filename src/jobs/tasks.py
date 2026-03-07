@@ -149,16 +149,17 @@ def process_job(self, job_id: str) -> None:
                     raise
                 finally:
                     if attempt_no is not None:
-                        pipeline.finalize_attempt(
-                            db,
-                            job_id=job_id,
-                            attempt_no=attempt_no,
-                            attempt_status=attempt_status,
-                            job_status=job_status,
-                            finished_at=now_utc(),
-                            error=error,
-                            result=result,
-                        )
+                        with db.begin_nested():
+                            pipeline.finalize_attempt(
+                                db,
+                                job_id=job_id,
+                                attempt_no=attempt_no,
+                                attempt_status=attempt_status,
+                                job_status=job_status,
+                                finished_at=now_utc(),
+                                error=error,
+                                result=result,
+                            )
 
         task_log(
             self,
