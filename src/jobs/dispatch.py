@@ -42,6 +42,7 @@ def _build_dispatcher() -> JobDispatcher:
     Return the dispatcher implementation for the current runtime environment.
     """
     from src.config.settings import settings
+
     if settings.job_dispatcher == "noop":
         return NoopJobDispatcher()
     return CeleryJobDispatcher()

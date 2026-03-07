@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from src.db.repository import save
 from src.db.utils import tx
+from src.jobs.ports import JobSubmitter
 
 from . import repository as repo
 from .enums import ReportStatus
@@ -107,6 +108,7 @@ def _submit_report_generation_job(
     report_id: str,
     idempotency_key: str | None,
     request_id: str | None,
+    submit_job: JobSubmitter,
 ):
     """
     Submit the asynchronous job responsible for generating the report.
@@ -114,9 +116,8 @@ def _submit_report_generation_job(
     The job payload contains the report id so that the worker can load
     the report and produce the final result.
     """
-    from src.jobs import service as jobs_service
 
-    return jobs_service.submit_job(
+    return submit_job(
         db=db,
         job_type=REPORT_GENERATE,
         payload={"report_id": report_id},
@@ -130,6 +131,7 @@ def create_report(
     *,
     idempotency_key: str | None,
     request_id: str | None,
+    submit_job: JobSubmitter,
 ) -> Report:
     """
     Create a report and submit its generation job.
@@ -152,6 +154,7 @@ def create_report(
             report_id=report.id,
             idempotency_key=idempotency_key,
             request_id=request_id,
+            submit_job=submit_job,
         )
 
         return _attach_job_to_report(db, report_id=report.id, job_id=job.id)

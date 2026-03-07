@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from src.apps.reports import service as reports_service
 from src.core.context import REQUEST_ID_HEADER
 from src.db.session import get_db
+from src.jobs.service import submit_job
 
 from .schemas import ReportCreateRequest, ReportResponse
 
@@ -32,6 +33,7 @@ def create_report(
         db=db,
         idempotency_key=idempotency_key,
         request_id=request_id,
+        submit_job=submit_job,
     )
     return ReportResponse.model_validate(report)
 

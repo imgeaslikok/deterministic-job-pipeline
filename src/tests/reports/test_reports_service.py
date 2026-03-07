@@ -20,6 +20,7 @@ from src.apps.reports.service import (
     create_report,
 )
 from src.jobs.models import Job
+from src.jobs.service import submit_job
 from src.outbox.models import OutboxEvent
 from src.tests.utils import generate_idempotency_key
 
@@ -47,14 +48,10 @@ def test_create_report_reuses_existing_report_for_same_idempotency_key(db_sessio
     events_before = db_session.query(OutboxEvent).count()
 
     report1 = create_report(
-        db_session,
-        idempotency_key=key,
-        request_id="req-1",
+        db_session, idempotency_key=key, request_id="req-1", submit_job=submit_job
     )
     report2 = create_report(
-        db_session,
-        idempotency_key=key,
-        request_id="req-2",
+        db_session, idempotency_key=key, request_id="req-2", submit_job=submit_job
     )
 
     reports_after = db_session.query(Report).count()
@@ -121,6 +118,7 @@ def test_create_report_rolls_back_when_job_attachment_fails(db_session, monkeypa
             db_session,
             idempotency_key=generate_idempotency_key("report-create-rollback"),
             request_id="req-rollback",
+            submit_job=submit_job,
         )
 
     db_session.rollback()

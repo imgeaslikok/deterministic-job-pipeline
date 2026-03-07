@@ -64,6 +64,7 @@ def create_report_with_job(
         db,
         idempotency_key=generate_idempotency_key(idempotency_prefix),
         request_id=request_id,
+        submit_job=submit_job,
     )
     db.commit()
     db.refresh(report)
