@@ -11,6 +11,7 @@ import pytest
 
 from src.apps.reports import repository as reports_repo
 from src.db.session import SessionLocal
+from src.db.unit_of_work import UnitOfWork
 from src.jobs import repository as jobs_repo
 from src.jobs.registry import clear_registry
 
@@ -23,6 +24,15 @@ def db_session():
         yield session
     finally:
         session.close()
+
+
+@pytest.fixture()
+def uow(db_session):
+    """
+    UnitOfWork for write operations in tests.
+    """
+
+    return UnitOfWork(db_session)
 
 
 @pytest.fixture(autouse=True)

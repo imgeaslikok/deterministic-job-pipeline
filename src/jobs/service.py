@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.db.utils import tx
+from src.db.unit_of_work import UnitOfWork
 from src.outbox import service as outbox_service
 from src.outbox.events import JOB_DISPATCH_REQUESTED
 
@@ -20,7 +20,7 @@ from .models import Job
 
 
 def submit_job(
-    db: Session,
+    uow: UnitOfWork,
     *,
     job_type: str,
     payload: dict,
@@ -35,14 +35,14 @@ def submit_job(
     transaction boundary owned by the caller.
     """
     job = _create_job_row(
-        db,
+        uow.session,
         job_type=job_type,
         payload=payload,
         idempotency_key=idempotency_key,
     )
 
     outbox_service.create_event(
-        db,
+        uow.session,
         event_type=JOB_DISPATCH_REQUESTED,
         payload={
             "job_id": job.id,
@@ -66,30 +66,35 @@ def get_job(db: Session, *, id: str) -> Job:
     return job
 
 
-def retry_from_dlq(db: Session, *, id: str, request_id: str | None = None) -> Job:
-    """
-    Reset a dead job to pending and enqueue it again via the outbox.
-    """
-    with tx(db):
-        job = get_job(db, id=id)
-        if job.status != JobStatus.DEAD:
-            raise InvalidJobState(job_id=job.id, status=job.status.value)
+def retry_from_dlq(
+    uow: UnitOfWork,
+    *,
+    id: str,
+    request_id: str | None = None,
+) -> Job:
+    """Reset a dead job to pending and enqueue again."""
 
-        job.status = JobStatus.PENDING
-        job.last_error = None
-        job.result = None
-        repo.save(db, job)
+    job = get_job(uow.session, id=id)
 
-        outbox_service.create_event(
-            db,
-            event_type=JOB_DISPATCH_REQUESTED,
-            payload={
-                "job_id": job.id,
-                "request_id": request_id,
-            },
-        )
+    if job.status != JobStatus.DEAD:
+        raise InvalidJobState(job_id=job.id, status=job.status.value)
 
-        return job
+    job.status = JobStatus.PENDING
+    job.last_error = None
+    job.result = None
+
+    repo.save(uow.session, job)
+
+    outbox_service.create_event(
+        uow.session,
+        event_type=JOB_DISPATCH_REQUESTED,
+        payload={
+            "job_id": job.id,
+            "request_id": request_id,
+        },
+    )
+
+    return job
 
 
 def list_attempts(db: Session, *, job_id: str):

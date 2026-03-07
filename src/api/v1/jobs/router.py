@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
 
 from src.core.context import REQUEST_ID_HEADER
-from src.db.session import get_db
+from src.db.session import get_db, get_uow
+from src.db.unit_of_work import UnitOfWork
 from src.jobs import service as jobs_service
 
 from .schemas import JobAttemptResponse, JobResponse
@@ -38,10 +39,10 @@ def get_job(id: str, db: Session = Depends(get_db)) -> JobResponse:
 def retry_job(
     id: str,
     request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
-    db: Session = Depends(get_db),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> JobResponse:
     """Retry a DLQ job by resetting its state and re-enqueueing."""
-    job = jobs_service.retry_from_dlq(db=db, id=id, request_id=request_id)
+    job = jobs_service.retry_from_dlq(uow=uow, id=id, request_id=request_id)
     return JobResponse.model_validate(job)
 
 

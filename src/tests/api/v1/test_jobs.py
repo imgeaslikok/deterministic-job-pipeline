@@ -13,7 +13,7 @@ from src.jobs.registry import register
 from src.tests.factories import create_job, run_job
 
 
-def test_get_job_returns_job(api_base, client, db_session):
+def test_get_job_returns_job(api_base, client, uow):
     """GET /jobs/{id} should return job details for an existing job."""
     job_type = "demo.api.job.get"
 
@@ -22,7 +22,7 @@ def test_get_job_returns_job(api_base, client, db_session):
         return None
 
     job = create_job(
-        db_session,
+        uow,
         job_type=job_type,
         payload={"x": 1},
         idempotency_prefix="api-job-get",
@@ -41,7 +41,7 @@ def test_get_job_returns_job(api_base, client, db_session):
 def test_get_attempts_returns_attempt_audit_trail(
     api_base,
     client,
-    db_session,
+    uow,
 ):
     """GET /jobs/{id}/attempts should return recorded attempts for a job."""
     job_type = "demo.api.job.attempts"
@@ -51,7 +51,7 @@ def test_get_attempts_returns_attempt_audit_trail(
         return None
 
     job = create_job(
-        db_session,
+        uow,
         job_type=job_type,
         payload={},
         idempotency_prefix="api-job-attempts",
@@ -69,7 +69,7 @@ def test_get_attempts_returns_attempt_audit_trail(
     assert body[0]["attempt_no"] == 1
 
 
-def test_list_dlq_returns_dead_jobs(api_base, client, db_session):
+def test_list_dlq_returns_dead_jobs(api_base, client, uow):
     """GET /jobs/dlq should return jobs currently in dead state."""
     job_type = "demo.api.job.dlq"
 
@@ -78,7 +78,7 @@ def test_list_dlq_returns_dead_jobs(api_base, client, db_session):
         raise NonRetryableJobError("bad payload")
 
     job = create_job(
-        db_session,
+        uow,
         job_type=job_type,
         payload={},
         idempotency_prefix="api-job-dlq",
@@ -97,7 +97,7 @@ def test_list_dlq_returns_dead_jobs(api_base, client, db_session):
     assert dlq_job["status"] == JobStatus.DEAD.value
 
 
-def test_retry_job_resets_dead_job_to_pending(api_base, client, db_session, get_job):
+def test_retry_job_resets_dead_job_to_pending(api_base, client, uow, get_job):
     """POST /jobs/{id}/retry should reset a dead job back to pending."""
     job_type = "demo.api.job.retry"
 
@@ -106,7 +106,7 @@ def test_retry_job_resets_dead_job_to_pending(api_base, client, db_session, get_
         raise NonRetryableJobError("bad payload")
 
     job = create_job(
-        db_session,
+        uow,
         job_type=job_type,
         payload={},
         idempotency_prefix="api-job-retry",

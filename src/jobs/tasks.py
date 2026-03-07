@@ -14,7 +14,7 @@ from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
-from src.db.utils import tx
+from src.db.unit_of_work import UnitOfWork
 
 from . import pipeline
 from .enums import AttemptStatus, JobEvent, JobStatus
@@ -86,8 +86,10 @@ def process_job(self, job_id: str) -> None:
         event: JobEvent = JobEvent.ATTEMPT_SUCCEEDED
         level: LogLevel = LogLevel.INFO
 
-        with tx(db):
-            begin = pipeline.begin_attempt(db, job_id=job_id, started_at=started_at)
+        with UnitOfWork(db) as uow:
+            begin = pipeline.begin_attempt(
+                uow.session, job_id=job_id, started_at=started_at
+            )
             if not begin.should_run:
                 event, level, detail = (
                     JobEvent.ATTEMPT_NOOP,
@@ -100,7 +102,7 @@ def process_job(self, job_id: str) -> None:
                 attempt_no = begin.attempt_no
 
                 ctx = JobContext(
-                    db=db,
+                    uow=uow,
                     job_id=job_id,
                     attempt_no=attempt_no,
                     request_id=request_id,
@@ -149,17 +151,20 @@ def process_job(self, job_id: str) -> None:
                     raise
                 finally:
                     if attempt_no is not None:
-                        with db.begin_nested():
-                            pipeline.finalize_attempt(
-                                db,
-                                job_id=job_id,
-                                attempt_no=attempt_no,
-                                attempt_status=attempt_status,
-                                job_status=job_status,
-                                finished_at=now_utc(),
-                                error=error,
-                                result=result,
-                            )
+                        try:
+                            with uow.session.begin_nested():
+                                pipeline.finalize_attempt(
+                                    uow.session,
+                                    job_id=job_id,
+                                    attempt_no=attempt_no,
+                                    attempt_status=attempt_status,
+                                    job_status=job_status,
+                                    finished_at=now_utc(),
+                                    error=error,
+                                    result=result,
+                                )
+                        except Exception:
+                            pass
 
         task_log(
             self,
