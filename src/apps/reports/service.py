@@ -63,6 +63,68 @@ def _attach_job_to_report(db: Session, *, report_id: str, job_id: str) -> Report
     return report
 
 
+def _get_existing_report_by_idempotency_key(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+) -> Report | None:
+    """
+    Look up an existing report by idempotency key.
+    """
+    if not idempotency_key:
+        return None
+    return repo.get_by_idempotency_key(db, key=idempotency_key)
+
+
+def _create_report_with_recovery(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+) -> Report:
+    """
+    Create a report row while handling idempotency race conditions.
+
+    Attempts to insert a new report inside a nested transaction. If the
+    insert fails due to a uniqueness violation on the idempotency key,
+    the existing report associated with that key is returned instead.
+    """
+    try:
+        with db.begin_nested():
+            return _create_report_row(db, idempotency_key=idempotency_key)
+    except IntegrityError:
+        if not idempotency_key:
+            raise
+
+        existing = repo.get_by_idempotency_key(db, key=idempotency_key)
+        if existing is not None:
+            return existing
+        raise
+
+
+def _submit_report_generation_job(
+    db: Session,
+    *,
+    report_id: str,
+    idempotency_key: str | None,
+    request_id: str | None,
+):
+    """
+    Submit the asynchronous job responsible for generating the report.
+
+    The job payload contains the report id so that the worker can load
+    the report and produce the final result.
+    """
+    from src.jobs import service as jobs_service
+
+    return jobs_service.submit_job(
+        db=db,
+        job_type=REPORT_GENERATE,
+        payload={"report_id": report_id},
+        idempotency_key=idempotency_key,
+        request_id=request_id,
+    )
+
+
 def create_report(
     db: Session,
     *,
@@ -72,34 +134,26 @@ def create_report(
     """
     Create a report and submit its generation job.
     """
-
-    from src.jobs import service as jobs_service
-
     with tx(db):
-        if idempotency_key:
-            existing = repo.get_by_idempotency_key(db, key=idempotency_key)
-            if existing is not None:
-                return existing
+        existing = _get_existing_report_by_idempotency_key(
+            db,
+            idempotency_key=idempotency_key,
+        )
+        if existing is not None:
+            return existing
 
-        try:
-            with db.begin_nested():
-                report = _create_report_row(db, idempotency_key=idempotency_key)
-        except IntegrityError:
-            if not idempotency_key:
-                raise
+        report = _create_report_with_recovery(
+            db,
+            idempotency_key=idempotency_key,
+        )
 
-            existing = repo.get_by_idempotency_key(db, key=idempotency_key)
-            if existing is not None:
-                return existing
-            raise
-
-        job = jobs_service.submit_job(
-            db=db,
-            job_type=REPORT_GENERATE,
-            payload={"report_id": report.id},
+        job = _submit_report_generation_job(
+            db,
+            report_id=report.id,
             idempotency_key=idempotency_key,
             request_id=request_id,
         )
+
         return _attach_job_to_report(db, report_id=report.id, job_id=job.id)
 
 

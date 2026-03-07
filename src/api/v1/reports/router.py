@@ -6,7 +6,7 @@ Provides operations for creating and retrieving reports.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, status
 from sqlalchemy.orm import Session
 
 from src.apps.reports import service as reports_service
@@ -42,6 +42,4 @@ def get_report(id: str, db: Session = Depends(get_db)) -> ReportResponse:
     Fetch a report by id.
     """
     report = reports_service.get_report(db=db, report_id=id)
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
     return ReportResponse.model_validate(report)
