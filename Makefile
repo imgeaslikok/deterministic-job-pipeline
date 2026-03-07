@@ -43,8 +43,8 @@ format:
 	$(DOCKER_COMPOSE) exec $(API_SERVICE) ruff format .
 
 test:
-	$(DOCKER_COMPOSE) exec -e ENVIRONMENT=test $(API_SERVICE) alembic upgrade head
-	$(DOCKER_COMPOSE) exec -e ENVIRONMENT=test $(API_SERVICE) pytest -q
+	$(DOCKER_COMPOSE) exec -e ENVIRONMENT=test -e JOB_DISPATCHER=noop $(API_SERVICE) alembic upgrade head
+	$(DOCKER_COMPOSE) exec -e ENVIRONMENT=test -e JOB_DISPATCHER=noop $(API_SERVICE) pytest -q
 
 shell:
 	$(DOCKER_COMPOSE) exec $(API_SERVICE) sh
