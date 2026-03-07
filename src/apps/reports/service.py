@@ -6,6 +6,7 @@ Handles report lifecycle orchestration and integrates with the jobs system.
 
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.db.repository import save
@@ -80,7 +81,17 @@ def create_report(
             if existing is not None:
                 return existing
 
-        report = _create_report_row(db, idempotency_key=idempotency_key)
+        try:
+            with db.begin_nested():
+                report = _create_report_row(db, idempotency_key=idempotency_key)
+        except IntegrityError:
+            if not idempotency_key:
+                raise
+
+            existing = repo.get_by_idempotency_key(db, key=idempotency_key)
+            if existing is not None:
+                return existing
+            raise
 
         job = jobs_service.submit_job(
             db=db,

@@ -112,14 +112,14 @@ def _create_job_row(
             return existing
 
     try:
-        return repo.create(
-            db,
-            job_type=job_type,
-            payload=payload,
-            idempotency_key=idempotency_key,
-        )
+        with db.begin_nested():
+            return repo.create(
+                db,
+                job_type=job_type,
+                payload=payload,
+                idempotency_key=idempotency_key,
+            )
     except IntegrityError:
-        db.rollback()
         if idempotency_key:
             existing = repo.get_by_idempotency_key(db, key=idempotency_key)
             if existing:
