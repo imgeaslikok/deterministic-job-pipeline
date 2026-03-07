@@ -43,7 +43,7 @@ async def _idempotency_conflict(
     return error_response(
         HTTPStatus.CONFLICT,
         detail="Idempotency-Key was reused with different request parameters.",
-        idempotency_key=exc.key,
+        idempotency_key=exc.idempotency_key,
     )
 
 
