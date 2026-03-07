@@ -9,6 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from src.apps.reports.enums import ReportStatus
+
 
 class ReportCreateRequest(BaseModel):
     """
@@ -27,7 +29,7 @@ class ReportResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: str
-    status: str
+    status: ReportStatus
     job_id: str | None = None
     result: dict[str, Any] | None = None
     created_at: datetime
