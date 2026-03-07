@@ -38,7 +38,7 @@ def get(db: Session, *, id: str) -> OutboxEvent | None:
 
 
 def get_for_update(db: Session, *, id: str) -> OutboxEvent | None:
-    """Fetch a outbox event with a row-level lock."""
+    """Fetch an outbox event with a row-level lock."""
     stmt = select(OutboxEvent).where(OutboxEvent.id == id).with_for_update()
     return db.execute(stmt).scalar_one_or_none()
 
