@@ -45,7 +45,7 @@ def backoff_delay_seconds(retry_count: int) -> int:
     """
     Compute the delay before the next publish attempt.
 
-    Uses linear backoff based on retry count.
+    Uses exponential backoff: BASE *  2^(retry_count-1), capped at CAP.
     """
     base_seconds = OUTBOX_PUBLISH_BACKOFF_BASE_SECONDS
     cap_seconds = OUTBOX_PUBLISH_BACKOFF_CAP_SECONDS
