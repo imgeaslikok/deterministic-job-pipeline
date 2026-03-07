@@ -150,8 +150,14 @@ def test_publish_pending_events_skips_locked_events_and_publishes_next(db_sessio
     publish_session = SessionLocal()
 
     try:
-        locked_event = repo.claim_next_pending(lock_session, now=now_utc())
-        assert locked_event is not None
+        locked_events = repo.claim_pending_batch(
+            lock_session,
+            now=now_utc(),
+            limit=1,
+        )
+
+        assert locked_events
+        locked_event = locked_events[0]
         assert (locked_event.payload or {}).get("job_id") == first_job.id
 
         published_count = publish_pending_events(

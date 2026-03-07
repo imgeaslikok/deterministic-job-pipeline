@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from src.db.repository import save
 
+from .config import OUTBOX_PUBLISH_BATCH_LIMIT
 from .enums import OutboxStatus
 from .models import OutboxEvent
 
@@ -36,7 +37,9 @@ def get(db: Session, *, id: str) -> OutboxEvent | None:
     return db.get(OutboxEvent, id)
 
 
-def list_pending(db: Session, *, limit: int = 100) -> list[OutboxEvent]:
+def list_pending(
+    db: Session, *, limit: int = OUTBOX_PUBLISH_BATCH_LIMIT
+) -> list[OutboxEvent]:
     """List pending outbox events ordered by creation time."""
     stmt = (
         select(OutboxEvent)
@@ -47,12 +50,13 @@ def list_pending(db: Session, *, limit: int = 100) -> list[OutboxEvent]:
     return list(db.execute(stmt).scalars().all())
 
 
-def claim_next_pending(
+def claim_pending_batch(
     db: Session,
     *,
     now: datetime,
-) -> OutboxEvent | None:
-    """Return the next publishable outbox event under a row lock."""
+    limit: int,
+) -> list[OutboxEvent]:
+    """Return the next publishable outbox events under row locks."""
     stmt = (
         select(OutboxEvent)
         .where(OutboxEvent.status == OutboxStatus.PENDING)
@@ -64,6 +68,6 @@ def claim_next_pending(
         )
         .order_by(OutboxEvent.created_at.asc(), OutboxEvent.id.asc())
         .with_for_update(skip_locked=True)
-        .limit(1)
+        .limit(limit)
     )
-    return db.execute(stmt).scalars().first()
+    return list(db.execute(stmt).scalars().all())

@@ -16,7 +16,7 @@ from src.core.utils import now_utc
 from src.db.repository import save
 
 from . import repository as repo
-from .config import MAX_PUBLISH_RETRIES
+from .config import MAX_PUBLISH_RETRIES, OUTBOX_PUBLISH_BATCH_LIMIT
 from .enums import OutboxStatus
 from .events import (
     JOB_DISPATCH_REQUESTED,
@@ -110,23 +110,22 @@ def publish_pending_events(
     db: Session,
     *,
     dispatch_job: JobDispatch,
-    limit: int = 100,
+    limit: int = OUTBOX_PUBLISH_BATCH_LIMIT,
 ) -> int:
     """
     Publish pending outbox events.
 
-    Claims pending events one by one under row locks, dispatches supported
+    Claims pending events in batches under row locks, dispatches supported
     events, and updates their status. Returns the number of successfully
     published events.
     """
 
+    claimed_at = now_utc()
+    events = repo.claim_pending_batch(db, now=claimed_at, limit=limit)
+
     published_count = 0
 
-    while published_count < limit:
-        event = repo.claim_next_pending(db, now=now_utc())
-        if event is None:
-            break
-
+    for event in events:
         publisher_log(
             LogLevel.INFO,
             OUTBOX_EVENT_CLAIMED,
