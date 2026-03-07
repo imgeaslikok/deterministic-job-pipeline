@@ -16,20 +16,20 @@ from src.core.utils import now_utc
 from src.db.repository import save
 
 from . import repository as repo
+from .config import MAX_PUBLISH_RETRIES
 from .enums import OutboxStatus
-from .events import JOB_DISPATCH_REQUESTED
-from .exceptions import UnsupportedOutboxEventType
+from .events import (
+    JOB_DISPATCH_REQUESTED,
+    OUTBOX_EVENT_CLAIMED,
+    OUTBOX_EVENT_FAILED,
+    OUTBOX_EVENT_PUBLISHED,
+    OUTBOX_EVENT_RETRY_SCHEDULED,
+)
+from .messages import unsupported_event_type_error
 from .models import OutboxEvent
 from .utils import backoff_delay_seconds, is_terminal_publish_error, publisher_log
 
 JobDispatch = Callable[[str, str | None], None]
-
-MAX_PUBLISH_RETRIES = 5
-
-OUTBOX_EVENT_CLAIMED = "outbox.event.claimed"
-OUTBOX_EVENT_PUBLISHED = "outbox.event.published"
-OUTBOX_EVENT_RETRY_SCHEDULED = "outbox.event.retry_scheduled"
-OUTBOX_EVENT_FAILED = "outbox.event.failed"
 
 
 def create_event(
@@ -133,15 +133,29 @@ def publish_pending_events(
             outbox_event=event,
         )
 
+        if event.event_type != JOB_DISPATCH_REQUESTED:
+            error = unsupported_event_type_error(event.event_type)
+            update_event(
+                db,
+                event=event,
+                status=OutboxStatus.FAILED,
+                error=error,
+            )
+            publisher_log(
+                LogLevel.ERROR,
+                OUTBOX_EVENT_FAILED,
+                outbox_event=event,
+                detail=error,
+            )
+            db.commit()
+            continue
+
         try:
-            if event.event_type == JOB_DISPATCH_REQUESTED:
-                payload = event.payload or {}
-                dispatch_job(
-                    payload["job_id"],
-                    payload.get("request_id"),
-                )
-            else:
-                raise UnsupportedOutboxEventType(event.event_type)
+            payload = event.payload or {}
+            dispatch_job(
+                payload["job_id"],
+                payload.get("request_id"),
+            )
 
             update_event(
                 db,

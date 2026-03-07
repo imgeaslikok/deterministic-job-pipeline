@@ -9,6 +9,7 @@ import logging
 from src.core.enums import LogLevel
 from src.core.logging import build_log_extra
 
+from .config import OUTBOX_PUBLISH_BACKOFF_BASE_SECONDS
 from .exceptions import UnsupportedOutboxEventType
 from .models import OutboxEvent
 
@@ -39,10 +40,12 @@ def publisher_log(
 
 def backoff_delay_seconds(retry_count: int) -> int:
     """
-    Return the delay before the next publish attempt.
+    Compute the delay before the next publish attempt.
+
+    Uses linear backoff based on retry count.
     """
 
-    return 30 * retry_count
+    return OUTBOX_PUBLISH_BACKOFF_BASE_SECONDS * retry_count
 
 
 def is_terminal_publish_error(exc: Exception) -> bool:
