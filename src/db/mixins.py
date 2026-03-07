@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String
+from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.utils import now_utc
@@ -26,8 +26,11 @@ class IdMixin:
 class TimestampMixin:
     """Adds created_at and updated_at timestamp columns."""
 
-    created_at: Mapped[datetime] = mapped_column(default=now_utc, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=now_utc,
         onupdate=now_utc,
         nullable=False,
