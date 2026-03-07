@@ -26,7 +26,7 @@ from src.tests.utils import generate_idempotency_key
 
 def test_create_report_creates_pending_row(db_session, get_report):
     """Creating a report should persist a pending report with no job attached."""
-    report = _create_report_row(db_session)
+    report = _create_report_row(db_session, idempotency_key=None)
     db_session.commit()
 
     report2 = get_report(report.id)
@@ -35,9 +35,42 @@ def test_create_report_creates_pending_row(db_session, get_report):
     assert report2.job_id is None
 
 
+def test_create_report_reuses_existing_report_for_same_idempotency_key(db_session):
+    """
+    Return the existing report when the same idempotency key is reused.
+    """
+
+    key = generate_idempotency_key("report-create-same")
+
+    reports_before = db_session.query(Report).count()
+    jobs_before = db_session.query(Job).count()
+    events_before = db_session.query(OutboxEvent).count()
+
+    report1 = create_report(
+        db_session,
+        idempotency_key=key,
+        request_id="req-1",
+    )
+    report2 = create_report(
+        db_session,
+        idempotency_key=key,
+        request_id="req-2",
+    )
+
+    reports_after = db_session.query(Report).count()
+    jobs_after = db_session.query(Job).count()
+    events_after = db_session.query(OutboxEvent).count()
+
+    assert report2.id == report1.id
+    assert report2.job_id == report1.job_id
+    assert reports_after == reports_before + 1
+    assert jobs_after == jobs_before + 1
+    assert events_after == events_before + 1
+
+
 def test_attach_job_sets_job_id(db_session, get_report):
     """Attaching a job should set the job_id on the report."""
-    report = _create_report_row(db_session)
+    report = _create_report_row(db_session, idempotency_key=None)
     db_session.commit()
 
     _attach_job_to_report(db_session, report_id=report.id, job_id="job-123")
@@ -56,7 +89,7 @@ def test_attach_job_missing_report_raises(db_session):
 
 def test_attach_job_conflicting_job_raises(db_session):
     """Attaching a different job to the same report should raise ReportJobAlreadyAttached."""
-    report = _create_report_row(db_session)
+    report = _create_report_row(db_session, idempotency_key=None)
     db_session.commit()
 
     _attach_job_to_report(db_session, report_id=report.id, job_id="job-1")
@@ -104,7 +137,7 @@ def test_create_report_rolls_back_when_job_attachment_fails(db_session, monkeypa
 
 def test_complete_report_sets_ready_and_result(db_session, get_report):
     """Completing a report should mark it ready and persist the result payload."""
-    report = _create_report_row(db_session)
+    report = _create_report_row(db_session, idempotency_key=None)
     db_session.commit()
 
     result = {"url": "s3://bucket/x.pdf"}
@@ -119,7 +152,7 @@ def test_complete_report_sets_ready_and_result(db_session, get_report):
 
 def test_complete_report_invalid_state_raises(db_session):
     """Completing a report twice should raise InvalidReportState."""
-    report = _create_report_row(db_session)
+    report = _create_report_row(db_session, idempotency_key=None)
     db_session.commit()
 
     complete_report(db_session, report_id=report.id, result={"ok": True})

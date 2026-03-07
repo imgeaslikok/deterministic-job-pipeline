@@ -22,11 +22,19 @@ from .job_types import REPORT_GENERATE
 from .models import Report
 
 
-def _create_report_row(db: Session) -> Report:
-    """Create and persist a new report in pending state."""
-    report = Report(status=ReportStatus.PENDING)
-    repo.create(db, report=report)
-    return report
+def _create_report_row(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+) -> Report:
+    """
+    Create and persist a new report in pending state.
+    """
+    report = Report(
+        status=ReportStatus.PENDING,
+        idempotency_key=idempotency_key,
+    )
+    return repo.create(db, report=report)
 
 
 def _attach_job_to_report(db: Session, *, report_id: str, job_id: str) -> Report:
@@ -63,10 +71,17 @@ def create_report(
     """
     Create a report and submit its generation job.
     """
+
     from src.jobs import service as jobs_service
 
     with tx(db):
-        report = _create_report_row(db)
+        if idempotency_key:
+            existing = repo.get_by_idempotency_key(db, key=idempotency_key)
+            if existing is not None:
+                return existing
+
+        report = _create_report_row(db, idempotency_key=idempotency_key)
+
         job = jobs_service.submit_job(
             db=db,
             job_type=REPORT_GENERATE,
