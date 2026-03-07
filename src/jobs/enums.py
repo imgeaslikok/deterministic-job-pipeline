@@ -11,7 +11,6 @@ class JobStatus(str, enum.Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
-    FAILED = "failed"
     DEAD = "dead"
 
 
