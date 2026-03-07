@@ -29,6 +29,10 @@ def submit_job(
 ) -> Job:
     """
     Create (or reuse) a job and record a dispatch request in the outbox.
+
+    This function does not manage its own transaction. When atomicity with
+    caller-managed state is required, it must be invoked inside an existing
+    transaction boundary owned by the caller.
     """
     job = _create_job_row(
         db,
