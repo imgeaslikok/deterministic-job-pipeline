@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://app:app@localhost:5432/app"
     redis_url: str = "redis://localhost:6379/0"
     environment: str = "dev"
+    job_dispatcher: str = "celery"
     job_executors: list[str] = [
         "src.apps.reports.executors",
     ]

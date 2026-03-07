@@ -7,6 +7,8 @@ publishing outbox dispatch events.
 
 from __future__ import annotations
 
+import traceback
+
 from src.config.celery import celery
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
@@ -138,19 +140,25 @@ def process_job(self, job_id: str) -> None:
                     detail = error
                     if need_retry:
                         retry_reason = error
-
+                except Exception:
+                    error = traceback.format_exc()
+                    job_status = JobStatus.DEAD
+                    attempt_status = AttemptStatus.FAILED
+                    event = JobEvent.MOVED_TO_DLQ
+                    level = LogLevel.ERROR
+                    raise
                 finally:
-                    finished_at = now_utc()
-                    pipeline.finalize_attempt(
-                        db,
-                        job_id=job_id,
-                        attempt_no=attempt_no,
-                        attempt_status=attempt_status,
-                        job_status=job_status,
-                        finished_at=finished_at,
-                        error=error,
-                        result=result,
-                    )
+                    if attempt_no is not None:
+                        pipeline.finalize_attempt(
+                            db,
+                            job_id=job_id,
+                            attempt_no=attempt_no,
+                            attempt_status=attempt_status,
+                            job_status=job_status,
+                            finished_at=now_utc(),
+                            error=error,
+                            result=result,
+                        )
 
         task_log(
             self,

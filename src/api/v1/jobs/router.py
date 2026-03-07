@@ -4,9 +4,10 @@ Jobs API endpoints.
 Provides inspection and operational controls for background jobs.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
 
+from src.core.context import REQUEST_ID_HEADER
 from src.db.session import get_db
 from src.jobs import service as jobs_service
 
@@ -34,9 +35,13 @@ def get_job(id: str, db: Session = Depends(get_db)) -> JobResponse:
 
 
 @router.post("/{id}/retry", response_model=JobResponse)
-def retry_job(id: str, db: Session = Depends(get_db)) -> JobResponse:
+def retry_job(
+    id: str,
+    request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
+    db: Session = Depends(get_db),
+) -> JobResponse:
     """Retry a DLQ job by resetting its state and re-enqueueing."""
-    job = jobs_service.retry_from_dlq(db=db, id=id)
+    job = jobs_service.retry_from_dlq(db=db, id=id, request_id=request_id)
     return JobResponse.model_validate(job)
 
 

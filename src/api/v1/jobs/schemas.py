@@ -24,6 +24,9 @@ class JobResponse(BaseModel):
     last_error: str | None = None
     result: dict[str, Any] | None = None
 
+    created_at: datetime
+    updated_at: datetime
+
 
 class JobAttemptResponse(BaseModel):
     """API representation of a job attempt."""
