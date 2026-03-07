@@ -6,10 +6,15 @@ Responsible for sending jobs to the background worker.
 
 from __future__ import annotations
 
-from src.config.settings import settings
+from typing import Protocol
+
 from src.core.context import REQUEST_ID_HEADER
 
 from .tasks import process_job
+
+
+class JobDispatcher(Protocol):
+    def dispatch(self, *, job_id: str, request_id: str | None) -> None: ...
 
 
 class CeleryJobDispatcher:
@@ -29,16 +34,29 @@ class NoopJobDispatcher:
         return
 
 
-def get_job_dispatcher() -> CeleryJobDispatcher | NoopJobDispatcher:
+_DISPATCHER: JobDispatcher | None = None
+
+
+def _build_dispatcher() -> JobDispatcher:
     """
     Return the dispatcher implementation for the current runtime environment.
     """
-    if settings.environment == "test":
+    from src.config.settings import settings
+    if settings.job_dispatcher == "noop":
         return NoopJobDispatcher()
     return CeleryJobDispatcher()
 
 
+def get_dispatcher() -> JobDispatcher:
+    """
+    Return the singleton job dispatcher for the current process.
+    """
+    global _DISPATCHER
+    if _DISPATCHER is None:
+        _DISPATCHER = _build_dispatcher()
+    return _DISPATCHER
+
+
 def dispatch_job(job_id: str, request_id: str | None) -> None:
     """Dispatch a job using the configured dispatcher."""
-    dispatcher = get_job_dispatcher()
-    dispatcher.dispatch(job_id=job_id, request_id=request_id)
+    return get_dispatcher().dispatch(job_id=job_id, request_id=request_id)
