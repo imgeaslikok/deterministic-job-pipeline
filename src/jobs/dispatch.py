@@ -29,11 +29,16 @@ class NoopJobDispatcher:
         return
 
 
+def get_job_dispatcher() -> CeleryJobDispatcher | NoopJobDispatcher:
+    """
+    Return the dispatcher implementation for the current runtime environment.
+    """
+    if settings.environment == "test":
+        return NoopJobDispatcher()
+    return CeleryJobDispatcher()
+
+
 def dispatch_job(job_id: str, request_id: str | None) -> None:
     """Dispatch a job using the configured dispatcher."""
-    if settings.environment == "test":
-        dispatcher = NoopJobDispatcher()
-    else:
-        dispatcher = CeleryJobDispatcher()
-
+    dispatcher = get_job_dispatcher()
     dispatcher.dispatch(job_id=job_id, request_id=request_id)
