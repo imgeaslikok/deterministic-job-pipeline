@@ -9,17 +9,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from sqlalchemy.orm import Session
+from src.db.unit_of_work import UnitOfWork
 
 from .models import Job
 
 
 class JobSubmitter(Protocol):
-    """Callable contract for submitting background jobs."""
+    """Callable contract for submitting a background job within a UoW."""
 
     def __call__(
         self,
-        db: Session,
+        uow: UnitOfWork,
         *,
         job_type: str,
         payload: dict,

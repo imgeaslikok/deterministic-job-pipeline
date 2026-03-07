@@ -53,7 +53,7 @@ def generate_report(ctx: JobContext, payload: dict[str, Any]) -> ExecutionResult
     result = _build_result(report_id=report_id, ctx=ctx)
 
     try:
-        complete_report(ctx.db, report_id=report_id, result=result)
+        complete_report(ctx.uow, report_id=report_id, result=result)
     except ReportNotFound as e:
         # Domain invariant violation -> do not retry.
         raise NonRetryableJobError(str(e)) from e

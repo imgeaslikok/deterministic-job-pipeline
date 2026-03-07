@@ -9,6 +9,8 @@ from typing import Any, Callable, Optional
 
 from sqlalchemy.orm import Session
 
+from src.db.unit_of_work import UnitOfWork
+
 from .models import Job
 
 
@@ -21,12 +23,22 @@ class ExecutionResult:
 
 @dataclass(frozen=True)
 class JobContext:
-    """Execution context passed to job executors."""
+    """
+    Execution context passed to job executors.
 
-    db: Session
+    uow — active transaction
+    db  — alias for uow.session
+    """
+
+    uow: UnitOfWork
     job_id: str
     attempt_no: int
     request_id: Optional[str] = None
+
+    @property
+    def db(self) -> Session:
+        """Backwards compatible alias."""
+        return self.uow.session
 
 
 @dataclass(frozen=True)

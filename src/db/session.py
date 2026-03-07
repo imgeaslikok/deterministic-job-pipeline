@@ -10,6 +10,8 @@ from sqlalchemy.orm import sessionmaker
 
 from src.config.settings import settings
 
+from .unit_of_work import UnitOfWork
+
 # Engine with connection health checks enabled
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 
@@ -28,5 +30,14 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    finally:
+        db.close()
+
+
+def get_uow():
+    """Provide a UnitOfWork for write operations."""
+    db = SessionLocal()
+    try:
+        yield UnitOfWork(db)
     finally:
         db.close()

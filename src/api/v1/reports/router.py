@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from src.apps.reports import service as reports_service
 from src.core.context import REQUEST_ID_HEADER
-from src.db.session import get_db
+from src.db.session import get_db, get_uow
+from src.db.unit_of_work import UnitOfWork
 from src.jobs.service import submit_job
 
 from .schemas import ReportCreateRequest, ReportResponse
@@ -24,13 +25,13 @@ def create_report(
     req: ReportCreateRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
-    db: Session = Depends(get_db),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> ReportResponse:
     """
     Create a new report and submit its generation job.
     """
     report = reports_service.create_report(
-        db=db,
+        uow=uow,
         idempotency_key=idempotency_key,
         request_id=request_id,
         submit_job=submit_job,

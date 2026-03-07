@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.db.repository import save
-from src.db.utils import tx
+from src.db.unit_of_work import UnitOfWork
 from src.jobs.ports import JobSubmitter
 
 from . import repository as repo
@@ -103,7 +103,7 @@ def _create_report_with_recovery(
 
 
 def _submit_report_generation_job(
-    db: Session,
+    uow: UnitOfWork,
     *,
     report_id: str,
     idempotency_key: str | None,
@@ -116,9 +116,8 @@ def _submit_report_generation_job(
     The job payload contains the report id so that the worker can load
     the report and produce the final result.
     """
-
     return submit_job(
-        db=db,
+        uow=uow,
         job_type=REPORT_GENERATE,
         payload={"report_id": report_id},
         idempotency_key=idempotency_key,
@@ -127,7 +126,7 @@ def _submit_report_generation_job(
 
 
 def create_report(
-    db: Session,
+    uow: UnitOfWork,
     *,
     idempotency_key: str | None,
     request_id: str | None,
@@ -136,28 +135,27 @@ def create_report(
     """
     Create a report and submit its generation job.
     """
-    with tx(db):
-        existing = _get_existing_report_by_idempotency_key(
-            db,
-            idempotency_key=idempotency_key,
-        )
-        if existing is not None:
-            return existing
+    existing = _get_existing_report_by_idempotency_key(
+        uow.session,
+        idempotency_key=idempotency_key,
+    )
+    if existing is not None:
+        return existing
 
-        report = _create_report_with_recovery(
-            db,
-            idempotency_key=idempotency_key,
-        )
+    report = _create_report_with_recovery(
+        uow.session,
+        idempotency_key=idempotency_key,
+    )
 
-        job = _submit_report_generation_job(
-            db,
-            report_id=report.id,
-            idempotency_key=idempotency_key,
-            request_id=request_id,
-            submit_job=submit_job,
-        )
+    job = _submit_report_generation_job(
+        uow,
+        report_id=report.id,
+        idempotency_key=idempotency_key,
+        request_id=request_id,
+        submit_job=submit_job,
+    )
 
-        return _attach_job_to_report(db, report_id=report.id, job_id=job.id)
+    return _attach_job_to_report(uow.session, report_id=report.id, job_id=job.id)
 
 
 def get_report(db: Session, *, report_id: str) -> Report:
@@ -168,19 +166,18 @@ def get_report(db: Session, *, report_id: str) -> Report:
     return report
 
 
-def complete_report(db: Session, *, report_id: str, result: dict) -> Report:
+def complete_report(uow: UnitOfWork, *, report_id: str, result: dict) -> Report:
     """
     Mark a report as ready and persist its result.
     """
-    with tx(db):
-        report = repo.get_for_update(db, id=report_id)
-        if report is None:
-            raise ReportNotFound(report_id)
+    report = repo.get_for_update(uow.session, id=report_id)
+    if report is None:
+        raise ReportNotFound(report_id)
 
-        if report.status != ReportStatus.PENDING:
-            raise InvalidReportState(report_id, status=report.status.value)
+    if report.status != ReportStatus.PENDING:
+        raise InvalidReportState(report_id, status=report.status.value)
 
-        report.result = result
-        report.status = ReportStatus.READY
-        save(db, report)
-        return report
+    report.result = result
+    report.status = ReportStatus.READY
+    save(uow.session, report)
+    return report
