@@ -37,6 +37,12 @@ def get(db: Session, *, id: str) -> OutboxEvent | None:
     return db.get(OutboxEvent, id)
 
 
+def get_for_update(db: Session, *, id: str) -> OutboxEvent | None:
+    """Fetch a outbox event with a row-level lock."""
+    stmt = select(OutboxEvent).where(OutboxEvent.id == id).with_for_update()
+    return db.execute(stmt).scalar_one_or_none()
+
+
 def list_pending(
     db: Session, *, limit: int = OUTBOX_PUBLISH_BATCH_LIMIT
 ) -> list[OutboxEvent]:
@@ -50,20 +56,20 @@ def list_pending(
     return list(db.execute(stmt).scalars().all())
 
 
-def claim_pending_batch(
+def claim_pending_batch_ids(
     db: Session,
     *,
     now: datetime,
     limit: int,
-) -> list[OutboxEvent]:
+) -> list[str]:
     """
-    Return the next publishable outbox events under row locks.
+    Claim pending event ids under row locks.
 
     Uses FOR UPDATE SKIP LOCKED so that concurrent publishers can safely
     claim disjoint batches without processing the same event twice.
     """
     stmt = (
-        select(OutboxEvent)
+        select(OutboxEvent.id)
         .where(OutboxEvent.status == OutboxStatus.PENDING)
         .where(
             or_(

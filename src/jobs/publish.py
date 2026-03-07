@@ -14,9 +14,8 @@ def publish_outbox_job_dispatch_events(*, limit: int = 100) -> int:
     """
     Publish pending job dispatch events from the outbox.
     """
-    with SessionLocal() as db:
-        return outbox_service.publish_pending_events(
-            db,
-            dispatch_job=dispatch_job,
-            limit=limit,
-        )
+    return outbox_service.publish_pending_events(
+        SessionLocal,
+        dispatch_job=dispatch_job,
+        limit=limit,
+    )

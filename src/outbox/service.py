@@ -259,7 +259,7 @@ def decide_publish_failure(
 
 
 def publish_pending_events(
-    db: Session,
+    session_factory,
     *,
     dispatch_job: JobDispatch,
     limit: int = OUTBOX_PUBLISH_BATCH_LIMIT,
@@ -273,30 +273,32 @@ def publish_pending_events(
     Each event is committed independently to guarantee durability of the
     publish outcome even if later events fail.
     """
-
-    claimed_at = now_utc()
-    events = repo.claim_pending_batch(db, now=claimed_at, limit=limit)
+    with session_factory() as db:
+        claimed_at = now_utc()
+        event_ids = repo.claim_pending_batch_ids(db, now=claimed_at, limit=limit)
+        db.commit()
 
     published_count = 0
 
-    for event in events:
-        publisher_log(
-            LogLevel.INFO,
-            OUTBOX_EVENT_CLAIMED,
-            outbox_event=event,
-        )
-
-        published = _publish_single_event(
-            db,
-            event=event,
-            dispatch_job=dispatch_job,
-        )
-
-        # Event-level commit policy:
-        # Each event outcome is committed independently.
-        db.commit()
-
-        if published:
-            published_count += 1
+    for event_id in event_ids:
+        with session_factory() as db:
+            event = repo.get_for_update(db, id=event_id)
+            if event is None or event.status != OutboxStatus.PENDING:
+                continue
+            publisher_log(
+                LogLevel.INFO,
+                OUTBOX_EVENT_CLAIMED,
+                outbox_event=event,
+            )
+            published = _publish_single_event(
+                db,
+                event=event,
+                dispatch_job=dispatch_job,
+            )
+            # Event-level commit policy:
+            # Each event outcome is committed independently.
+            db.commit()
+            if published:
+                published_count += 1
 
     return published_count

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
+from src.db.utils import tx
 from src.jobs.service import submit_job
 from src.outbox import repository as repo
 from src.outbox.enums import OutboxStatus
@@ -19,16 +20,36 @@ from src.outbox.service import MAX_PUBLISH_RETRIES, publish_pending_events
 from src.tests.utils import generate_idempotency_key
 
 
+def _submit_test_job(
+    db_session,
+    *,
+    job_type: str,
+    payload: dict,
+    idempotency_key: str,
+    request_id: str | None,
+):
+    """
+    Submit a test job inside an explicit transaction boundary.
+    """
+    with tx(db_session):
+        return submit_job(
+            db_session,
+            job_type=job_type,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            request_id=request_id,
+        )
+
+
 def test_submit_job_creates_pending_outbox_event(db_session):
     """Submitting a job should create a pending outbox dispatch event."""
-    job = submit_job(
+    job = _submit_test_job(
         db_session,
         job_type="demo.outbox",
         payload={"x": 1},
         idempotency_key=generate_idempotency_key("outbox-submit"),
         request_id="req-123",
     )
-    db_session.commit()
 
     events = repo.list_pending(db_session, limit=100)
 
@@ -50,20 +71,19 @@ def test_publish_pending_events_dispatches_and_marks_event_published(db_session)
     """Publishing events should dispatch the job and mark the event as published."""
     dispatched: list[tuple[str, str | None]] = []
 
-    job = submit_job(
+    job = _submit_test_job(
         db_session,
         job_type="demo.outbox.publish.success",
         payload={},
         idempotency_key=generate_idempotency_key("outbox-publish-success"),
         request_id="req-success",
     )
-    db_session.commit()
 
     def fake_dispatch(job_id: str, request_id: str | None) -> None:
         dispatched.append((job_id, request_id))
 
     published_count = publish_pending_events(
-        db_session,
+        SessionLocal,
         dispatch_job=fake_dispatch,
     )
 
@@ -87,20 +107,19 @@ def test_publish_pending_events_dispatches_and_marks_event_published(db_session)
 
 def test_publish_pending_events_schedules_retry_when_dispatch_fails(db_session):
     """Failed dispatch should schedule a retry for the outbox event."""
-    job = submit_job(
+    job = _submit_test_job(
         db_session,
         job_type="demo.outbox.publish.failed",
         payload={},
         idempotency_key=generate_idempotency_key("outbox-publish-failed"),
         request_id="req-failed",
     )
-    db_session.commit()
 
     def failing_dispatch(job_id: str, request_id: str | None) -> None:
         raise RuntimeError("dispatch failed")
 
     published_count = publish_pending_events(
-        db_session,
+        SessionLocal,
         dispatch_job=failing_dispatch,
     )
 
@@ -125,21 +144,20 @@ def test_publish_pending_events_schedules_retry_when_dispatch_fails(db_session):
 
 def test_publish_pending_events_skips_locked_events_and_publishes_next(db_session):
     """Publishing should skip locked pending events and publish the next available one."""
-    first_job = submit_job(
+    first_job = _submit_test_job(
         db_session,
         job_type="demo.outbox.locked.first",
         payload={},
         idempotency_key=generate_idempotency_key("outbox-locked-first"),
         request_id="req-first",
     )
-    second_job = submit_job(
+    second_job = _submit_test_job(
         db_session,
         job_type="demo.outbox.locked.second",
         payload={},
         idempotency_key=generate_idempotency_key("outbox-locked-second"),
         request_id="req-second",
     )
-    db_session.commit()
 
     dispatched: list[tuple[str, str | None]] = []
 
@@ -147,29 +165,30 @@ def test_publish_pending_events_skips_locked_events_and_publishes_next(db_sessio
         dispatched.append((job_id, request_id))
 
     lock_session = SessionLocal()
-    publish_session = SessionLocal()
 
     try:
-        locked_events = repo.claim_pending_batch(
+        locked_ids = repo.claim_pending_batch_ids(
             lock_session,
             now=now_utc(),
             limit=1,
         )
 
-        assert locked_events
-        locked_event = locked_events[0]
+        assert locked_ids
+
+        locked_event = repo.get(lock_session, id=locked_ids[0])
+        assert locked_event is not None
         assert (locked_event.payload or {}).get("job_id") == first_job.id
 
         published_count = publish_pending_events(
-            publish_session,
+            SessionLocal,
             dispatch_job=fake_dispatch,
             limit=10,
         )
 
-        publish_session.expire_all()
+        db_session.expire_all()
 
         stmt = select(OutboxEvent)
-        events = list(publish_session.execute(stmt).scalars().all())
+        events = list(db_session.execute(stmt).scalars().all())
 
         first_event = next(
             e
@@ -194,26 +213,24 @@ def test_publish_pending_events_skips_locked_events_and_publishes_next(db_sessio
     finally:
         lock_session.rollback()
         lock_session.close()
-        publish_session.close()
 
 
 def test_publish_pending_events_marks_event_failed_after_retry_limit(db_session):
     """Transient dispatch failure should become terminal after retry exhaustion."""
-    job = submit_job(
+    job = _submit_test_job(
         db_session,
         job_type="demo.outbox.publish.retry.exhausted",
         payload={},
         idempotency_key=generate_idempotency_key("outbox-publish-retry-exhausted"),
         request_id="req-retry-exhausted",
     )
-    db_session.commit()
 
     def failing_dispatch(job_id: str, request_id: str | None) -> None:
         raise RuntimeError("temporary dispatch failure")
 
     for _ in range(MAX_PUBLISH_RETRIES + 1):
         publish_pending_events(
-            db_session,
+            SessionLocal,
             dispatch_job=failing_dispatch,
         )
         db_session.expire_all()
