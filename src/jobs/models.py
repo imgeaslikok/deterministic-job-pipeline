@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +34,14 @@ class Job(IdMixin, TimestampMixin, Base):
     """Current job state (latest snapshot)."""
 
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index(
+            "uq_jobs_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     job_type: Mapped[str] = mapped_column(String(JOB_TYPE_MAX_LENGTH), index=True)
     idempotency_key: Mapped[str | None] = mapped_column(
