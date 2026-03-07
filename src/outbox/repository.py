@@ -56,7 +56,12 @@ def claim_pending_batch(
     now: datetime,
     limit: int,
 ) -> list[OutboxEvent]:
-    """Return the next publishable outbox events under row locks."""
+    """
+    Return the next publishable outbox events under row locks.
+
+    Uses FOR UPDATE SKIP LOCKED so that concurrent publishers can safely
+    claim disjoint batches without processing the same event twice.
+    """
     stmt = (
         select(OutboxEvent)
         .where(OutboxEvent.status == OutboxStatus.PENDING)

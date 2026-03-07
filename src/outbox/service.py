@@ -41,7 +41,6 @@ def create_event(
     """
     Create a new outbox event.
     """
-
     return repo.create(
         db,
         event_type=event_type,
@@ -54,7 +53,6 @@ def get_event(db: Session, *, event_id: str) -> OutboxEvent | None:
     """
     Fetch an outbox event by id.
     """
-
     return repo.get(db, id=event_id)
 
 
@@ -62,7 +60,6 @@ def list_pending_events(db: Session, *, limit: int = 100) -> list[OutboxEvent]:
     """
     Return pending outbox events.
     """
-
     return repo.list_pending(db, limit=limit)
 
 
@@ -77,7 +74,6 @@ def update_event(
     """
     Update the status of an outbox event.
     """
-
     event.status = status
     event.error = error
     event.published_at = published_at
@@ -95,7 +91,6 @@ def schedule_retry(
     """
     Schedule a retry for a transient publish failure.
     """
-
     event.status = OutboxStatus.PENDING
     event.error = error
     event.retry_count = int(event.retry_count or 0) + 1
@@ -104,6 +99,163 @@ def schedule_retry(
         seconds=backoff_delay_seconds(event.retry_count)
     )
     return save(db, event)
+
+
+def _handle_unsupported_event(db: Session, *, event: OutboxEvent) -> None:
+    """Mark an unsupported event type as failed."""
+    error = unsupported_event_type_error(event.event_type)
+
+    update_event(
+        db,
+        event=event,
+        status=OutboxStatus.FAILED,
+        error=error,
+    )
+
+    publisher_log(
+        LogLevel.ERROR,
+        OUTBOX_EVENT_FAILED,
+        outbox_event=event,
+        detail=error,
+    )
+
+
+def _publish_job_dispatch_event(
+    *,
+    event: OutboxEvent,
+    dispatch_job: JobDispatch,
+) -> None:
+    """Dispatch a JOB_DISPATCH_REQUESTED event."""
+    payload = event.payload or {}
+
+    dispatch_job(
+        payload["job_id"],
+        payload.get("request_id"),
+    )
+
+
+def _mark_event_published(db: Session, *, event: OutboxEvent) -> None:
+    """Mark an event as successfully published."""
+    update_event(
+        db,
+        event=event,
+        status=OutboxStatus.PUBLISHED,
+        published_at=now_utc(),
+    )
+
+    publisher_log(
+        LogLevel.INFO,
+        OUTBOX_EVENT_PUBLISHED,
+        outbox_event=event,
+    )
+
+
+def _handle_publish_failure(
+    db: Session,
+    *,
+    event: OutboxEvent,
+    exc: Exception,
+) -> None:
+    """Handle publish failure and decide retry vs terminal failure."""
+    error = str(exc)
+    retry_count = int(event.retry_count or 0)
+
+    decision = decide_publish_failure(
+        exc=exc,
+        retry_count=retry_count,
+    )
+
+    if decision == OutboxStatus.FAILED:
+        update_event(
+            db,
+            event=event,
+            status=OutboxStatus.FAILED,
+            error=error,
+        )
+
+        publisher_log(
+            LogLevel.ERROR,
+            OUTBOX_EVENT_FAILED,
+            outbox_event=event,
+            detail=error,
+        )
+        return
+
+    schedule_retry(
+        db,
+        event=event,
+        error=error,
+        now=now_utc(),
+    )
+
+    publisher_log(
+        LogLevel.WARNING,
+        OUTBOX_EVENT_RETRY_SCHEDULED,
+        outbox_event=event,
+        detail=error,
+    )
+
+
+def _publish_single_event(
+    db: Session,
+    *,
+    event: OutboxEvent,
+    dispatch_job: JobDispatch,
+) -> bool:
+    """
+    Publish a single outbox event.
+
+    Returns True if the event was successfully published.
+    """
+
+    if event.event_type != JOB_DISPATCH_REQUESTED:
+        _handle_unsupported_event(db, event=event)
+        return False
+
+    try:
+        _publish_job_dispatch_event(
+            event=event,
+            dispatch_job=dispatch_job,
+        )
+
+        _mark_event_published(db, event=event)
+        return True
+
+    except Exception as exc:
+        db.rollback()
+
+        refreshed = get_event(db, event_id=event.id)
+        if refreshed is None:
+            raise
+
+        _handle_publish_failure(
+            db,
+            event=refreshed,
+            exc=exc,
+        )
+
+        return False
+
+
+def decide_publish_failure(
+    *,
+    exc: Exception,
+    retry_count: int,
+) -> OutboxStatus:
+    """
+    Decide whether a publish failure should be retried or marked terminal.
+
+    The decision is based on the next retry count that would be recorded
+    if the event were scheduled again.
+    """
+    if is_terminal_publish_error(exc):
+        return OutboxStatus.FAILED
+
+    next_retry_count = retry_count + 1
+    if next_retry_count > MAX_PUBLISH_RETRIES:
+        return OutboxStatus.FAILED
+
+    return OutboxStatus.PENDING
 
 
 def publish_pending_events(
@@ -116,8 +268,10 @@ def publish_pending_events(
     Publish pending outbox events.
 
     Claims pending events in batches under row locks, dispatches supported
-    events, and updates their status. Returns the number of successfully
-    published events.
+    events, and updates their status.
+
+    Each event is committed independently to guarantee durability of the
+    publish outcome even if later events fail.
     """
 
     claimed_at = now_utc()
@@ -132,81 +286,17 @@ def publish_pending_events(
             outbox_event=event,
         )
 
-        if event.event_type != JOB_DISPATCH_REQUESTED:
-            error = unsupported_event_type_error(event.event_type)
-            update_event(
-                db,
-                event=event,
-                status=OutboxStatus.FAILED,
-                error=error,
-            )
-            publisher_log(
-                LogLevel.ERROR,
-                OUTBOX_EVENT_FAILED,
-                outbox_event=event,
-                detail=error,
-            )
-            db.commit()
-            continue
+        published = _publish_single_event(
+            db,
+            event=event,
+            dispatch_job=dispatch_job,
+        )
 
-        try:
-            payload = event.payload or {}
-            dispatch_job(
-                payload["job_id"],
-                payload.get("request_id"),
-            )
+        # Event-level commit policy:
+        # Each event outcome is committed independently.
+        db.commit()
 
-            update_event(
-                db,
-                event=event,
-                status=OutboxStatus.PUBLISHED,
-                published_at=now_utc(),
-            )
-            publisher_log(
-                LogLevel.INFO,
-                OUTBOX_EVENT_PUBLISHED,
-                outbox_event=event,
-            )
-            db.commit()
+        if published:
             published_count += 1
-
-        except Exception as exc:
-            db.rollback()
-
-            refreshed = get_event(db, event_id=event.id)
-            if refreshed is None:
-                raise
-
-            error = str(exc)
-            retry_count = int(refreshed.retry_count or 0)
-
-            if is_terminal_publish_error(exc) or retry_count >= MAX_PUBLISH_RETRIES:
-                update_event(
-                    db,
-                    event=refreshed,
-                    status=OutboxStatus.FAILED,
-                    error=error,
-                )
-                publisher_log(
-                    LogLevel.ERROR,
-                    OUTBOX_EVENT_FAILED,
-                    outbox_event=refreshed,
-                    detail=error,
-                )
-            else:
-                schedule_retry(
-                    db,
-                    event=refreshed,
-                    error=error,
-                    now=now_utc(),
-                )
-                publisher_log(
-                    LogLevel.WARNING,
-                    OUTBOX_EVENT_RETRY_SCHEDULED,
-                    outbox_event=refreshed,
-                    detail=error,
-                )
-
-            db.commit()
 
     return published_count
