@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from src.core.context import REQUEST_ID_HEADER
+from src.core.enums import JobDispatchMode
 
 from .tasks import process_job
 
@@ -43,7 +44,7 @@ def _build_dispatcher() -> JobDispatcher:
     """
     from src.config.settings import settings
 
-    if settings.job_dispatcher == "noop":
+    if settings.job_dispatcher == JobDispatchMode.NOOP.value:
         return NoopJobDispatcher()
     return CeleryJobDispatcher()
 

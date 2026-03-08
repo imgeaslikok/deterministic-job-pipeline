@@ -11,3 +11,10 @@ class LogLevel(str, enum.Enum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
+
+
+class JobDispatchMode(str, enum.Enum):
+    """"""
+
+    CELERY = "celery"
+    NOOP = "noop"
