@@ -3,9 +3,11 @@ FastAPI application factory and startup lifecycle.
 """
 
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse, Response
 
 from src.api.common.middleware import RequestIdMiddleware
 from src.api.v1.exceptions import register_exception_handlers
@@ -43,12 +45,26 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz", include_in_schema=False)
     async def readyz():
-        """Readiness probe."""
-        return {"status": "ready"}
+        """Readiness probe — verifies DB connectivity."""
+
+        try:
+
+            def _check():
+                with engine.connect() as conn:
+                    conn.exec_driver_sql("SELECT 1")
+
+            await run_in_threadpool(_check)
+
+            return {"status": "ready"}
+
+        except Exception as exc:
+            return JSONResponse(
+                {"status": "unavailable", "detail": str(exc)},
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics():
-        from fastapi.responses import Response
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
