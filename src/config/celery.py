@@ -20,6 +20,7 @@ celery = Celery(
 # Worker reliability settings
 celery.conf.update(
     task_acks_late=True,  # acknowledge after task execution
+    task_acks_on_failure_or_timeout=False,  # nack on unhandled failure → broker requeues
     worker_prefetch_multiplier=1,  # avoid task hoarding per worker
     beat_schedule={
         "publish-job-dispatch-events": {
