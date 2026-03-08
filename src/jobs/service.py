@@ -16,7 +16,7 @@ from src.outbox.events import JOB_DISPATCH_REQUESTED
 from . import repository as repo
 from .enums import JobStatus
 from .exceptions import IdempotencyKeyConflict, InvalidJobState, JobNotFound
-from .models import Job
+from .models import Job, JobAttempt
 
 
 def submit_job(
@@ -100,7 +100,7 @@ def retry_from_dlq(
     return job
 
 
-def list_attempts(db: Session, *, job_id: str):
+def list_attempts(db: Session, *, job_id: str) -> list[JobAttempt]:
     """Return the execution attempt history for a job."""
     _ = get_job(db, id=job_id)
     return repo.list_attempts(db, job_id=job_id)
