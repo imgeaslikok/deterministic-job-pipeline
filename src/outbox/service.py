@@ -57,13 +57,6 @@ def get_event(db: Session, *, event_id: str) -> OutboxEvent | None:
     return repo.get(db, id=event_id)
 
 
-def list_pending_events(db: Session, *, limit: int = 100) -> list[OutboxEvent]:
-    """
-    Return pending outbox events.
-    """
-    return repo.list_pending(db, limit=limit)
-
-
 def update_event(
     db: Session,
     *,
