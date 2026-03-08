@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from src.db.repository import save, save_and_refresh
@@ -15,14 +15,35 @@ from .enums import AttemptStatus, JobStatus
 from .models import Job, JobAttempt
 
 
-def list_by_status(db: Session, *, status: JobStatus, limit: int = 50) -> list[Job]:
-    """List jobs filtered by status."""
-    stmt = (
-        select(Job)
-        .where(Job.status == status)
-        .order_by(Job.created_at.desc())
-        .limit(limit)
-    )
+def list_by_status(
+    db: Session,
+    *,
+    status: JobStatus,
+    limit: int = 50,
+    cursor_id: str | None = None,
+) -> list[Job]:
+    """
+    List jobs filtered by status, ordered by created_at DESC.
+
+    cursor_id — opaque cursor: pass the id of the last job from the previous
+    page to fetch the next page. Implements keyset pagination on (created_at, id).
+    """
+    stmt = select(Job).where(Job.status == status)
+
+    if cursor_id is not None:
+        cursor_job = db.get(Job, cursor_id)
+        if cursor_job is not None:
+            stmt = stmt.where(
+                or_(
+                    Job.created_at < cursor_job.created_at,
+                    and_(
+                        Job.created_at == cursor_job.created_at,
+                        Job.id < cursor_id,
+                    ),
+                )
+            )
+
+    stmt = stmt.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit)
     return list(db.execute(stmt).scalars().all())
 
 

@@ -53,9 +53,21 @@ def submit_job(
     return job
 
 
-def list_dlq(db: Session, *, limit: int = 50) -> list[Job]:
-    """List jobs currently in the DLQ state."""
-    return repo.list_by_status(db, status=JobStatus.DEAD, limit=limit)
+def list_dlq(
+    db: Session,
+    *,
+    limit: int = 50,
+    cursor_id: str | None = None,
+) -> list[Job]:
+    """
+    List jobs currently in the DLQ state.
+
+    cursor_id — pass the id of the last job from the previous page to fetch
+    the next page. Returns at most limit jobs ordered by created_at DESC.
+    """
+    return repo.list_by_status(
+        db, status=JobStatus.DEAD, limit=limit, cursor_id=cursor_id
+    )
 
 
 def get_job(db: Session, *, id: str) -> Job:

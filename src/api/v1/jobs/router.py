@@ -20,11 +20,15 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 @router.get("/dlq", response_model=list[JobResponse])
 def list_dlq(
     limit: int = Query(50, ge=1, le=500),
+    cursor: str | None = Query(
+        default=None, description="Job id of the last item from the previous page."
+    ),
     db: Session = Depends(get_db),
 ) -> list[JobResponse]:
-    """List DLQ (dead) jobs."""
+    """List DLQ (dead) jobs. Pass cursor=<last_job_id> to fetch the next page."""
     return [
-        JobResponse.model_validate(j) for j in jobs_service.list_dlq(db=db, limit=limit)
+        JobResponse.model_validate(j)
+        for j in jobs_service.list_dlq(db=db, limit=limit, cursor_id=cursor)
     ]
 
 
