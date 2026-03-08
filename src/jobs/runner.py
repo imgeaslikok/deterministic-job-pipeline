@@ -1,9 +1,9 @@
 """
-Celery worker task for job execution.
+Job execution runtime helpers.
 
-Contains the process_job task and all execution helpers.
-Kept separate from tasks.py to prevent circular imports
-with dispatch.py (which needs to import process_job).
+Contains the process_job runtime flow and execution helpers.
+Used by tasks.py to keep Celery task entrypoints separate
+from the job execution orchestration logic.
 """
 
 from __future__ import annotations
@@ -298,24 +298,16 @@ def _schedule_retry(
     )
 
 
-@celery.task(
-    bind=True,
-    max_retries=settings.job_max_retries,
-    default_retry_delay=settings.job_default_retry_delay,
-)
-def process_job(self, job_id: str) -> None:
+def run_process_job(task, *, job_id: str) -> None:
     """
-    Execute a single job attempt.
-
-    Runs the registered executor, persists the attempt outcome,
-    and schedules retries or DLQ transitions when required.
+    Execute the process_job runtime flow for a single job.
     """
 
-    celery_ctx = _resolve_celery_context(self)
+    celery_ctx = _resolve_celery_context(task)
 
     with SessionLocal() as db:
         task_log(
-            self,
+            task,
             LogLevel.INFO,
             JobEvent.ATTEMPT_BEGIN,
             job_id=job_id,
@@ -331,7 +323,7 @@ def process_job(self, job_id: str) -> None:
         )
 
     task_log(
-        self,
+        task,
         outcome.level,
         outcome.event,
         job_id=job_id,
@@ -344,7 +336,7 @@ def process_job(self, job_id: str) -> None:
         return
 
     _schedule_retry(
-        self,
+        task,
         job_id=job_id,
         celery_ctx=celery_ctx,
         outcome=outcome,

@@ -10,7 +10,7 @@ from typing import Protocol
 
 from src.core.context import REQUEST_ID_HEADER
 
-from .worker import process_job
+from .tasks import process_job
 
 
 class JobDispatcher(Protocol):
