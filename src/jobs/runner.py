@@ -18,6 +18,7 @@ from src.config.celery import celery
 from src.config.settings import settings
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
+from src.core.logging import build_log_extra
 from src.core.metrics import JOB_ATTEMPTS_TOTAL, JOB_DURATION_SECONDS
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
@@ -130,8 +131,13 @@ def _safe_finalize_attempt(
             )
     except Exception:
         logger.exception(
-            "finalize_attempt failed — job may be stuck in RUNNING",
-            extra={"job_id": job.id, "attempt_no": attempt_no},
+            JobEvent.FINALIZE_FAILED.value,
+            extra=build_log_extra(
+                component="jobs.worker",
+                event=JobEvent.FINALIZE_FAILED.value,
+                job_id=job.id,
+                attempt_no=attempt_no,
+            ),
         )
 
 
