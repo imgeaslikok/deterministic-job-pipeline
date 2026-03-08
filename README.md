@@ -156,7 +156,7 @@ are reset to `PENDING` and re-dispatched through the outbox.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/healthz` | Liveness probe |
-| `GET` | `/readyz` | Readiness probe (verifies DB connectivity) |
+| `GET` | `/readyz` | Readiness probe (verifies DB and broker connectivity) |
 | `GET` | `/metrics` | Prometheus metrics endpoint |
 
 ---

@@ -45,23 +45,35 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz", include_in_schema=False)
     async def readyz():
-        """Readiness probe — verifies DB connectivity."""
+        """Readiness probe — verifies DB and broker connectivity."""
+        errors: dict[str, str] = {}
 
-        try:
+        def _check_db():
+            with engine.connect() as conn:
+                conn.exec_driver_sql("SELECT 1")
 
-            def _check():
-                with engine.connect() as conn:
-                    conn.exec_driver_sql("SELECT 1")
+        def _check_redis():
+            import redis as redis_lib
 
-            await run_in_threadpool(_check)
+            client = redis_lib.from_url(settings.redis_url, socket_connect_timeout=2)
+            try:
+                client.ping()
+            finally:
+                client.close()
 
-            return {"status": "ready"}
+        for name, check in (("db", _check_db), ("broker", _check_redis)):
+            try:
+                await run_in_threadpool(check)
+            except Exception as exc:
+                errors[name] = str(exc)
 
-        except Exception as exc:
+        if errors:
             return JSONResponse(
-                {"status": "unavailable", "detail": str(exc)},
+                {"status": "unavailable", "errors": errors},
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE,
             )
+
+        return {"status": "ready"}
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics():

@@ -469,9 +469,7 @@ Both metrics in `_run_executor` are emitted in the `finally` block, meaning they
 ### 10.3 Health and Readiness Probes
 
 - `GET /healthz` — always returns 200. Liveness probe.
-- `GET /readyz` — executes `SELECT 1` against the configured database. Returns 503 on failure. Readiness probe.
-
-There is no broker (Redis) health check in the readiness probe. Workers that can reach the database but not Redis would still return ready.
+- `GET /readyz` — checks both the database (`SELECT 1`) and the broker (`PING` via the `redis` client). Returns 503 with a per-component `errors` map if either check fails. Workers that can reach the database but not Redis will correctly report not ready.
 
 ### 10.4 What Is Currently Missing
 
@@ -591,4 +589,3 @@ reports
 | Area | Current State | Risk |
 |------|---------------|------|
 | Outbox publisher — single Beat | Cannot horizontally scale Beat | Low: Beat is single-instance by convention |
-| Redis health in readiness probe | Not checked | Low: workers fail fast on missing broker |
