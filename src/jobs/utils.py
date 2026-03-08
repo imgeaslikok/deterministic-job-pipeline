@@ -4,6 +4,7 @@ Utility helpers for job retry and execution behavior.
 
 from __future__ import annotations
 
+import logging as _logging
 import random
 from importlib import import_module
 
@@ -12,6 +13,8 @@ from src.core.enums import LogLevel
 from src.core.logging import build_log_extra
 
 from .enums import JobEvent
+
+_FALLBACK_LOGGER = _logging.getLogger("jobs.worker")
 
 
 def load_executors() -> None:
@@ -57,9 +60,7 @@ def task_log(task, level: LogLevel, event: JobEvent, **fields) -> None:
     Emit structured job pipeline logs through the task logger.
     """
 
-    logger = getattr(task, "logger", None)
-    if not logger:
-        return
+    logger = getattr(task, "logger", None) or _FALLBACK_LOGGER
 
     extra = build_log_extra(
         component="jobs.worker",
