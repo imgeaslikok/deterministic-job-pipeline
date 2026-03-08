@@ -12,8 +12,6 @@ from typing import Protocol
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import JobDispatchMode
 
-from .tasks import process_job
-
 
 class JobDispatcher(Protocol):
     def dispatch(self, *, job_id: str, request_id: str | None) -> None: ...
@@ -23,6 +21,10 @@ class CeleryJobDispatcher:
     """Dispatch jobs through the Celery task queue."""
 
     def dispatch(self, *, job_id: str, request_id: str | None) -> None:
+        # Deferred import: tasks.py → runner.py → dispatch.py would form a
+        # module-level cycle. Importing here resolves it at call time instead.
+        from .tasks import process_job
+
         process_job.apply_async(
             args=(job_id,),
             headers={REQUEST_ID_HEADER: request_id} if request_id else None,
@@ -46,7 +48,7 @@ def _build_dispatcher() -> JobDispatcher:
     """
     from src.config.settings import settings
 
-    if settings.job_dispatcher == JobDispatchMode.NOOP.value:
+    if settings.job_dispatcher == JobDispatchMode.NOOP:
         return NoopJobDispatcher()
     return CeleryJobDispatcher()
 
