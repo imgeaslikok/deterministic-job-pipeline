@@ -28,5 +28,8 @@ class Settings(BaseSettings):
     job_retry_backoff_cap_seconds: int = 60
     job_max_execution_seconds: int = 300
 
+    outbox_publish_interval_seconds: float = 2.0
+    stuck_job_sweep_interval_seconds: float = 60.0
+
 
 settings = Settings()

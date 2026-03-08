@@ -24,11 +24,11 @@ celery.conf.update(
     beat_schedule={
         "publish-job-dispatch-events": {
             "task": "src.jobs.tasks.publish_job_dispatch_events",
-            "schedule": 2.0,
+            "schedule": settings.outbox_publish_interval_seconds,
         },
         "reset-stuck-running-jobs": {
             "task": "src.jobs.tasks.reset_stuck_running_jobs",
-            "schedule": 60.0,
+            "schedule": settings.stuck_job_sweep_interval_seconds,
         },
     },
 )
