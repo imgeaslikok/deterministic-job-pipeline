@@ -149,7 +149,7 @@ def test_publish_pending_events_skips_locked_events_and_publishes_next(db_sessio
     lock_session = SessionLocal()
 
     try:
-        locked_ids = repo.claim_pending_batch_ids(
+        locked_ids = repo.get_pending_batch_ids(
             lock_session,
             now=now_utc(),
             limit=1,
@@ -195,6 +195,37 @@ def test_publish_pending_events_skips_locked_events_and_publishes_next(db_sessio
     finally:
         lock_session.rollback()
         lock_session.close()
+
+
+def test_publish_pending_events_drains_all_when_batch_is_full(db_session, uow):
+    """publish_pending_events should keep processing until the backlog is cleared."""
+    job_ids = []
+    for i in range(3):
+        job = submit_job(
+            uow,
+            job_type=f"demo.outbox.drain.{i}",
+            payload={},
+            idempotency_key=generate_idempotency_key(f"outbox-drain-{i}"),
+            request_id=f"req-drain-{i}",
+        )
+        job_ids.append(job.id)
+    uow.commit()
+
+    dispatched: list[str] = []
+
+    def fake_dispatch(job_id: str, request_id: str | None) -> None:
+        dispatched.append(job_id)
+
+    # batch_size=1 forces multiple loop iterations to clear all 3 events
+    published_count = publish_pending_events(
+        SessionLocal,
+        dispatch_job=fake_dispatch,
+        limit=1,
+    )
+
+    assert published_count >= 3
+    for job_id in job_ids:
+        assert job_id in dispatched
 
 
 def test_publish_pending_events_marks_event_failed_after_retry_limit(db_session, uow):

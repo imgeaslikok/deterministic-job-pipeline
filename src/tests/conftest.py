@@ -19,11 +19,8 @@ from src.jobs.registry import clear_registry
 @pytest.fixture()
 def db_session():
     """DB session per test."""
-    session = SessionLocal()
-    try:
+    with SessionLocal() as session:
         yield session
-    finally:
-        session.close()
 
 
 @pytest.fixture()

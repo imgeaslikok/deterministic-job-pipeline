@@ -14,7 +14,7 @@ from src.apps.reports.service import create_report
 from src.db.unit_of_work import UnitOfWork
 from src.jobs.models import Job
 from src.jobs.service import submit_job
-from src.jobs.tasks import process_job
+from src.jobs.worker import process_job
 from src.tests.utils import generate_idempotency_key
 
 
