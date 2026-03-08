@@ -4,7 +4,7 @@ Repository helpers for jobs and job attempts.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -95,26 +95,6 @@ def get_attempt(db: Session, *, job_id: str, attempt_no: int) -> JobAttempt | No
         .where(JobAttempt.attempt_no == attempt_no)
     )
     return db.execute(stmt).scalars().first()
-
-
-def create_attempt(
-    db: Session,
-    *,
-    job_id: str,
-    attempt_no: int,
-    status: AttemptStatus,
-    error: str | None = None,
-    started_at: datetime | None = None,
-) -> JobAttempt:
-    """Create a new attempt record."""
-    attempt = JobAttempt(
-        job_id=job_id,
-        attempt_no=attempt_no,
-        status=status,
-        error=error,
-        started_at=started_at or datetime.now(UTC),
-    )
-    return save(db, attempt)
 
 
 def update_attempt(
