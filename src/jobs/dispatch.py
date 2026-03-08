@@ -6,6 +6,7 @@ Responsible for sending jobs to the background worker.
 
 from __future__ import annotations
 
+import threading
 from typing import Protocol
 
 from src.core.context import REQUEST_ID_HEADER
@@ -36,6 +37,7 @@ class NoopJobDispatcher:
 
 
 _DISPATCHER: JobDispatcher | None = None
+_DISPATCHER_LOCK = threading.Lock()
 
 
 def _build_dispatcher() -> JobDispatcher:
@@ -55,7 +57,9 @@ def get_dispatcher() -> JobDispatcher:
     """
     global _DISPATCHER
     if _DISPATCHER is None:
-        _DISPATCHER = _build_dispatcher()
+        with _DISPATCHER_LOCK:
+            if _DISPATCHER is None:
+                _DISPATCHER = _build_dispatcher()
     return _DISPATCHER
 
 
