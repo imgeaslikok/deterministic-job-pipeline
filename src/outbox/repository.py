@@ -56,17 +56,18 @@ def list_pending(
     return list(db.execute(stmt).scalars().all())
 
 
-def claim_pending_batch_ids(
+def get_pending_batch_ids(
     db: Session,
     *,
     now: datetime,
     limit: int,
 ) -> list[str]:
     """
-    Claim pending event ids under row locks.
+    Fetch pending event ids under row locks (SKIP LOCKED).
 
-    Uses FOR UPDATE SKIP LOCKED so that concurrent publishers can safely
-    claim disjoint batches without processing the same event twice.
+    Locks are released on commit. The per-event FOR UPDATE in the
+    processing loop is the actual exclusive-access mechanism; this
+    call is an optimization to avoid re-scanning already-claimed rows.
     """
     stmt = (
         select(OutboxEvent.id)

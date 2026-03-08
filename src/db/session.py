@@ -27,17 +27,11 @@ def get_db():
     """
     Provide a database session for FastAPI requests.
     """
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         yield db
-    finally:
-        db.close()
 
 
 def get_uow():
     """Provide a UnitOfWork for write operations."""
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         yield UnitOfWork(db)
-    finally:
-        db.close()

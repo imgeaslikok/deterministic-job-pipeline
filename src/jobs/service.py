@@ -74,7 +74,10 @@ def retry_from_dlq(
 ) -> Job:
     """Reset a dead job to pending and enqueue again."""
 
-    job = get_job(uow.session, id=id)
+    # Use SELECT FOR UPDATE to prevent double-retry from concurrent requests.
+    job = repo.get_for_update(uow.session, id=id)
+    if not job:
+        raise JobNotFound(id)
 
     if job.status != JobStatus.DEAD:
         raise InvalidJobState(job_id=job.id, status=job.status.value)
@@ -103,6 +106,18 @@ def list_attempts(db: Session, *, job_id: str):
     return repo.list_attempts(db, job_id=job_id)
 
 
+def _validate_idempotent_match(
+    existing: Job,
+    *,
+    job_type: str,
+    payload: dict,
+    key: str,
+) -> None:
+    """Raise IdempotencyKeyConflict if the existing job has different parameters."""
+    if existing.job_type != job_type or (existing.payload or {}) != (payload or {}):
+        raise IdempotencyKeyConflict(key)
+
+
 def _create_job_row(
     db: Session,
     *,
@@ -111,13 +126,15 @@ def _create_job_row(
     idempotency_key: str | None,
 ) -> Job:
     """Create a new job row or reuse an existing one via idempotency key."""
+    # Fast path: non-locking read to return early for known keys.
+    # NOT race-safe on its own — the IntegrityError fallback below
+    # is the correctness mechanism for concurrent requests.
     if idempotency_key:
         existing = repo.get_by_idempotency_key(db, key=idempotency_key)
         if existing:
-            if existing.job_type != job_type or (existing.payload or {}) != (
-                payload or {}
-            ):
-                raise IdempotencyKeyConflict(idempotency_key)
+            _validate_idempotent_match(
+                existing, job_type=job_type, payload=payload, key=idempotency_key
+            )
             return existing
 
     try:
@@ -129,12 +146,12 @@ def _create_job_row(
                 idempotency_key=idempotency_key,
             )
     except IntegrityError:
+        # Race condition: concurrent request created the row between our read and insert.
         if idempotency_key:
             existing = repo.get_by_idempotency_key(db, key=idempotency_key)
             if existing:
-                if existing.job_type != job_type or (existing.payload or {}) != (
-                    payload or {}
-                ):
-                    raise IdempotencyKeyConflict(idempotency_key)
+                _validate_idempotent_match(
+                    existing, job_type=job_type, payload=payload, key=idempotency_key
+                )
                 return existing
         raise

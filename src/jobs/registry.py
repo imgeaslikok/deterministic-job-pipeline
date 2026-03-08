@@ -6,12 +6,14 @@ Maps job types to their registered executor functions.
 
 from __future__ import annotations
 
+import threading
 from typing import Dict
 
 from .exceptions import DuplicateExecutorRegistration, ExecutorNotRegistered
 from .types import Executor
 
 _EXECUTORS: Dict[str, Executor] = {}
+_REGISTRY_LOCK = threading.Lock()
 
 
 def register_executor(job_type: str):
@@ -22,9 +24,10 @@ def register_executor(job_type: str):
     """
 
     def decorator(fn: Executor) -> Executor:
-        if job_type in _EXECUTORS:
-            raise DuplicateExecutorRegistration(job_type)
-        _EXECUTORS[job_type] = fn
+        with _REGISTRY_LOCK:
+            if job_type in _EXECUTORS:
+                raise DuplicateExecutorRegistration(job_type)
+            _EXECUTORS[job_type] = fn
         return fn
 
     return decorator
@@ -40,7 +43,8 @@ def get_executor(job_type: str) -> Executor:
 
 def clear_registry() -> None:
     """Clear the executor registry (testing helper)."""
-    _EXECUTORS.clear()
+    with _REGISTRY_LOCK:
+        _EXECUTORS.clear()
 
 
 # Backwards-compat alias

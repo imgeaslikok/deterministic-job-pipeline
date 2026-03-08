@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     job_executors: list[str] = [
         "src.apps.reports.executors",
     ]
+    job_max_retries: int = 3
+    job_default_retry_delay: int = 2
+    job_retry_backoff_base: int = 2
+    job_retry_backoff_cap_seconds: int = 60
 
 
 settings = Settings()

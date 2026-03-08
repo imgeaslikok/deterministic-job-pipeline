@@ -5,6 +5,7 @@ Utility helpers for outbox publishing behavior.
 from __future__ import annotations
 
 import logging
+import random
 
 from src.core.enums import LogLevel
 from src.core.logging import build_log_extra
@@ -45,12 +46,13 @@ def backoff_delay_seconds(retry_count: int) -> int:
     """
     Compute the delay before the next publish attempt.
 
-    Uses exponential backoff: BASE *  2^(retry_count-1), capped at CAP.
+    Uses exponential backoff with full jitter: BASE * 2^(retry_count-1),
+    capped at CAP, then randomised in [0, max_delay] to avoid thundering herds.
     """
     base_seconds = OUTBOX_PUBLISH_BACKOFF_BASE_SECONDS
     cap_seconds = OUTBOX_PUBLISH_BACKOFF_CAP_SECONDS
-    delay = base_seconds * (2 ** max(retry_count - 1, 0))
-    return min(delay, cap_seconds)
+    max_delay = min(base_seconds * (2 ** max(retry_count - 1, 0)), cap_seconds)
+    return random.randint(0, max_delay)
 
 
 def is_terminal_publish_error(exc: Exception) -> bool:

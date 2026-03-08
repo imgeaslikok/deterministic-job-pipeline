@@ -14,12 +14,17 @@ from sqlalchemy.orm import Session
 from . import repository as repo
 from .enums import AttemptStatus, JobStatus
 from .exceptions import AttemptInvariantViolation
+from .models import Job, JobAttempt
 from .types import AttemptResult
+
+_TERMINAL_STATUSES: frozenset[JobStatus] = frozenset(
+    {JobStatus.COMPLETED, JobStatus.DEAD}
+)
 
 
 def _is_terminal(status: JobStatus) -> bool:
     """Return whether the job is in a terminal state."""
-    return status in (JobStatus.COMPLETED, JobStatus.DEAD)
+    return status in _TERMINAL_STATUSES
 
 
 def begin_attempt(db: Session, *, job_id: str, started_at: datetime) -> AttemptResult:
@@ -41,16 +46,18 @@ def begin_attempt(db: Session, *, job_id: str, started_at: datetime) -> AttemptR
     job.status = JobStatus.RUNNING
     job.attempts = attempt_no
     job.last_error = None
-    repo.save(db, job)
+    db.add(job)
+
+    attempt = JobAttempt(
+        job_id=job.id,
+        attempt_no=attempt_no,
+        status=AttemptStatus.RUNNING,
+        started_at=started_at,
+    )
+    db.add(attempt)
 
     try:
-        repo.create_attempt(
-            db,
-            job_id=job.id,
-            attempt_no=attempt_no,
-            status=AttemptStatus.RUNNING,
-            started_at=started_at,
-        )
+        db.flush()  # single flush for both the job update and attempt row
     except IntegrityError:
         # Concurrent duplicate invocation.
         return AttemptResult(False, "duplicate", job, None)
@@ -61,7 +68,7 @@ def begin_attempt(db: Session, *, job_id: str, started_at: datetime) -> AttemptR
 def finalize_attempt(
     db: Session,
     *,
-    job_id: str,
+    job: Job,
     attempt_no: int,
     attempt_status: AttemptStatus,
     job_status: JobStatus,
@@ -72,13 +79,12 @@ def finalize_attempt(
     """
     Finalize an attempt and update the job state.
 
+    Accepts the already-locked job object from begin_attempt, avoiding
+    a redundant SELECT FOR UPDATE round-trip.
+
     Applies both the immutable attempt update and the current job snapshot
     update within the active transaction.
     """
-    job = repo.get_for_update(db, id=job_id)
-    if not job:
-        return
-
     attempt = repo.get_attempt(db, job_id=job.id, attempt_no=attempt_no)
     if attempt is None:
         raise AttemptInvariantViolation(

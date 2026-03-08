@@ -33,5 +33,8 @@ class TimestampMixin:
         DateTime(timezone=True),
         default=now_utc,
         onupdate=now_utc,
+        # NOTE: onupdate fires only for ORM-level updates.
+        # Bulk UPDATE statements (db.execute(update(...))) bypass this.
+        # If bulk updates are introduced, use a PostgreSQL trigger for reliability.
         nullable=False,
     )

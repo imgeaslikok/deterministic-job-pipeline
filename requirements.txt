@@ -5,6 +5,7 @@ celery
 redis
 sqlalchemy
 alembic
+prometheus-client
 psycopg[binary]
 pydantic
 pydantic-settings

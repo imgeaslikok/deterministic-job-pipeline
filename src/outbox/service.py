@@ -160,9 +160,9 @@ def _handle_publish_failure(
     error = str(exc)
     retry_count = int(event.retry_count or 0)
 
-    decision = decide_publish_failure(
+    decision = _decide_publish_failure(
         exc=exc,
-        retry_count=retry_count,
+        current_retry_count=retry_count,
     )
 
     if decision == OutboxStatus.FAILED:
@@ -222,6 +222,9 @@ def _publish_single_event(
         return True
 
     except Exception as exc:
+        # Roll back any partial DB state (e.g. from _mark_event_published)
+        # before recording the failure. After rollback, 'event' may be
+        # expired/detached from the session identity map, so re-fetch it.
         db.rollback()
 
         refreshed = get_event(db, event_id=event.id)
@@ -237,22 +240,21 @@ def _publish_single_event(
         return False
 
 
-def decide_publish_failure(
+def _decide_publish_failure(
     *,
     exc: Exception,
-    retry_count: int,
+    current_retry_count: int,
 ) -> OutboxStatus:
     """
     Decide whether a publish failure should be retried or marked terminal.
 
-    The decision is based on the next retry count that would be recorded
-    if the event were scheduled again.
+    current_retry_count is the count BEFORE this failure is recorded.
+    Evaluates whether the next attempt (count + 1) would exceed MAX_PUBLISH_RETRIES.
     """
     if is_terminal_publish_error(exc):
         return OutboxStatus.FAILED
 
-    next_retry_count = retry_count + 1
-    if next_retry_count > MAX_PUBLISH_RETRIES:
+    if current_retry_count + 1 > MAX_PUBLISH_RETRIES:
         return OutboxStatus.FAILED
 
     return OutboxStatus.PENDING
@@ -268,37 +270,47 @@ def publish_pending_events(
     Publish pending outbox events.
 
     Claims pending events in batches under row locks, dispatches supported
-    events, and updates their status.
+    events, and updates their status. Continues draining while batches are
+    full, so a backlog clears in a single invocation rather than one tick
+    per batch.
 
     Each event is committed independently to guarantee durability of the
     publish outcome even if later events fail.
     """
-    with session_factory() as db:
-        claimed_at = now_utc()
-        event_ids = repo.claim_pending_batch_ids(db, now=claimed_at, limit=limit)
-        db.commit()
-
     published_count = 0
 
-    for event_id in event_ids:
+    while True:
         with session_factory() as db:
-            event = repo.get_for_update(db, id=event_id)
-            if event is None or event.status != OutboxStatus.PENDING:
-                continue
-            publisher_log(
-                LogLevel.INFO,
-                OUTBOX_EVENT_CLAIMED,
-                outbox_event=event,
-            )
-            published = _publish_single_event(
-                db,
-                event=event,
-                dispatch_job=dispatch_job,
-            )
-            # Event-level commit policy:
-            # Each event outcome is committed independently.
+            event_ids = repo.get_pending_batch_ids(db, now=now_utc(), limit=limit)
             db.commit()
-            if published:
-                published_count += 1
+
+        if not event_ids:
+            break
+
+        for event_id in event_ids:
+            with session_factory() as db:
+                event = repo.get_for_update(db, id=event_id)
+                if event is None or event.status != OutboxStatus.PENDING:
+                    continue
+                publisher_log(
+                    LogLevel.INFO,
+                    OUTBOX_EVENT_CLAIMED,
+                    outbox_event=event,
+                )
+                published = _publish_single_event(
+                    db,
+                    event=event,
+                    dispatch_job=dispatch_job,
+                )
+                # Event-level commit policy:
+                # Each event outcome is committed independently.
+                db.commit()
+                if published:
+                    published_count += 1
+
+        if len(event_ids) < limit:
+            # Partial batch — no more events to drain right now.
+            break
+        # Full batch — there may be more; loop immediately.
 
     return published_count

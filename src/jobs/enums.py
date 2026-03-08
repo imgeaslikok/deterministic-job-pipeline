@@ -32,3 +32,4 @@ class JobEvent(str, enum.Enum):
     RETRY_SCHEDULED = "job_retry_scheduled"
     RETRY_EAGER_SIMULATED = "job_retry_eager_simulated"
     MOVED_TO_DLQ = "job_moved_to_dlq"
+    FINALIZE_FAILED = "job_finalize_failed"
