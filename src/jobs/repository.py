@@ -26,6 +26,23 @@ def list_by_status(db: Session, *, status: JobStatus, limit: int = 50) -> list[J
     return list(db.execute(stmt).scalars().all())
 
 
+def list_stuck_running(
+    db: Session,
+    *,
+    stuck_before: datetime,
+    limit: int = 50,
+) -> list[Job]:
+    """Return RUNNING jobs not updated since stuck_before."""
+    stmt = (
+        select(Job)
+        .where(Job.status == JobStatus.RUNNING)
+        .where(Job.updated_at < stuck_before)
+        .with_for_update(skip_locked=True)
+        .limit(limit)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
 def get(db: Session, *, id: str) -> Job | None:
     """Fetch a job by id."""
     return db.get(Job, id)

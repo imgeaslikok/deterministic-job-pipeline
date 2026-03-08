@@ -10,8 +10,6 @@ from __future__ import annotations
 from src.config.celery import celery
 from src.config.settings import settings
 
-from .runner import run_process_job
-
 
 @celery.task(
     bind=True,
@@ -26,6 +24,8 @@ def process_job(self, job_id: str) -> None:
     and schedules retries or DLQ transitions when required.
     """
 
+    from .runner import run_process_job
+
     return run_process_job(self, job_id=job_id)
 
 
@@ -38,3 +38,22 @@ def publish_job_dispatch_events() -> int:
     from . import publish
 
     return publish.publish_outbox_job_dispatch_events()
+
+
+@celery.task
+def reset_stuck_running_jobs() -> int:
+    """
+    Reset jobs stuck in RUNNING beyond the configured execution timeout.
+    """
+
+    from src.db.session import SessionLocal
+    from src.db.unit_of_work import UnitOfWork
+
+    from .pipeline import reset_stuck_running_jobs
+
+    with SessionLocal() as db:
+        with UnitOfWork(db) as uow:
+            return reset_stuck_running_jobs(
+                uow.session,
+                max_execution_seconds=settings.job_max_execution_seconds,
+            )

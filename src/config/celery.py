@@ -6,6 +6,8 @@ Defines broker/backend, worker behavior, and periodic schedules.
 
 from celery import Celery
 
+from src.core.enums import Environment
+
 from .settings import settings
 
 celery = Celery(
@@ -24,11 +26,15 @@ celery.conf.update(
             "task": "src.jobs.tasks.publish_job_dispatch_events",
             "schedule": 2.0,
         },
+        "reset-stuck-running-jobs": {
+            "task": "src.jobs.tasks.reset_stuck_running_jobs",
+            "schedule": 60.0,
+        },
     },
 )
 
 # Test mode: run tasks synchronously
-if settings.environment == "test":
+if settings.environment == Environment.TEST:
     celery.conf.update(
         task_always_eager=True,
         task_eager_propagates=True,

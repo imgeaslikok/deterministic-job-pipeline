@@ -11,6 +11,10 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.core.utils import now_utc
+from src.outbox import service as outbox_service
+from src.outbox.events import JOB_DISPATCH_REQUESTED
+
 from . import repository as repo
 from .enums import AttemptStatus, JobStatus
 from .exceptions import AttemptInvariantViolation
@@ -104,3 +108,42 @@ def finalize_attempt(
     if result is not None:
         job.result = result
     repo.save(db, job)
+
+
+def reset_stuck_running_jobs(
+    db: Session,
+    *,
+    max_execution_seconds: int,
+    limit: int = 50,
+) -> int:
+    """
+    Reset RUNNING jobs that have exceeded the maximum execution time.
+
+    Resets matching jobs back to PENDING and enqueues a fresh dispatch
+    outbox event for each recovered job.
+    """
+    from datetime import timedelta
+
+    stuck_before = now_utc() - timedelta(seconds=max_execution_seconds)
+    jobs = repo.list_stuck_running(
+        db,
+        stuck_before=stuck_before,
+        limit=limit,
+    )
+
+    reset_count = 0
+
+    for job in jobs:
+        job.status = JobStatus.PENDING
+        job.last_error = "Reset from RUNNING by sweeper"
+        repo.save(db, job)
+
+        outbox_service.create_event(
+            db,
+            event_type=JOB_DISPATCH_REQUESTED,
+            payload={"job_id": job.id},
+        )
+
+        reset_count += 1
+
+    return reset_count
