@@ -1,18 +1,18 @@
 # deterministic-job-pipeline
 
-A production-oriented background job processing pipeline built with **FastAPI**, **Celery**, **PostgreSQL**, and the **Transactional Outbox pattern**. The pipeline provides reliable, deterministic job dispatch and execution with full attempt auditing, retry orchestration, and a dead letter queue.
+A production-oriented background job processing pipeline built with **FastAPI**, **Celery**, **PostgreSQL**, and the **Transactional Outbox pattern**. The pipeline provides reliable, deterministic job dispatch and execution with full attempt auditing, retry orchestration, a dead letter queue, and stuck-job recovery.
 
-The pipeline is domain-agnostic. Domains integrate by registering executors. A **report generation domain** is included as a working example.
+The pipeline is domain-agnostic. Domains integrate by registering executor functions. A **report generation domain** is included as a working reference implementation.
 
 ---
 
 ## What This Project Does
 
-This system solves a common reliability problem in distributed backends: how do you guarantee that a background job is *always* dispatched after a database commit, even if the process crashes between the two?
+This system solves a core reliability problem in distributed backends: how do you guarantee that a background job is *always* dispatched after a database commit — even if the process crashes between the two?
 
-The answer implemented here is the **Transactional Outbox Pattern**: the job row and a dispatch event are written in the same database transaction. A periodic publisher then reads pending events and dispatches them to Celery. This decouples dispatch reliability from the API request lifecycle.
+The answer implemented here is the **Transactional Outbox Pattern**: the job row and a dispatch event are written in the same database transaction. A periodic publisher reads pending events and dispatches them to Celery. This decouples dispatch reliability from the API request lifecycle.
 
-Once dispatched, jobs are executed under row-level locks with full attempt tracking. Retries use exponential backoff. Jobs that exhaust retries or fail permanently are moved to a dead letter queue (DLQ) and can be retried manually via the API.
+Once dispatched, jobs are executed under row-level locks with full attempt tracking. Retries use exponential backoff with full jitter. Jobs that exhaust retries or fail permanently are moved to a dead letter queue (DLQ) and can be retried manually via the API. A background sweeper task recovers jobs stuck in RUNNING state due to worker crashes.
 
 ---
 
@@ -33,7 +33,7 @@ jobs/service.submit_job()
   ▼
 outbox/service.publish_pending_events()   ← Celery Beat (every 2s)
   │   claims events via FOR UPDATE SKIP LOCKED
-  │   dispatches to Celery
+  │   dispatches to Celery broker
   ▼
 jobs/tasks.process_job(job_id)            ← Celery Worker
   │   acquires row lock on Job
@@ -44,7 +44,7 @@ jobs/tasks.process_job(job_id)            ← Celery Worker
 Domain Executor (e.g. reports/executors.py)
   │   performs domain work inside the active UoW transaction
   ▼
-Domain state update committed
+Domain state update committed atomically with job status
 ```
 
 ---
@@ -53,158 +53,83 @@ Domain state update committed
 
 ```
 src/
-├── api/
-│   ├── common/
-│   │   ├── exception_registry.py   # Auto-discovers and registers domain exception handlers
-│   │   ├── middleware.py           # RequestIdMiddleware (X-Request-Id propagation)
-│   │   └── responses.py           # Shared error_response() helper
-│   └── v1/
-│       ├── jobs/                  # Job inspection and retry endpoints
-│       │   ├── router.py
-│       │   ├── schemas.py
-│       │   └── exceptions.py      # Domain → HTTP exception mapping
-│       ├── reports/               # Report creation and retrieval endpoints
-│       │   ├── router.py
-│       │   ├── schemas.py
-│       │   └── exceptions.py
-│       ├── exceptions.py          # Wires exception handlers at startup
-│       └── router.py              # Mounts all v1 sub-routers
-│
-├── apps/
-│   └── reports/                   # Example domain: report generation
-│       ├── executors.py           # @register("report.generate") executor
-│       ├── service.py             # Report creation, completion, idempotency
-│       ├── repository.py          # DB access helpers for reports
-│       ├── models.py              # Report ORM model
-│       ├── enums.py               # ReportStatus
-│       ├── exceptions.py          # Domain exceptions
-│       ├── job_types.py           # Job type string constant
-│       └── messages.py            # Error message constants
-│
-├── jobs/                          # Core job pipeline (domain-agnostic)
-│   ├── tasks.py                   # Celery task entrypoints: process_job, publish_job_dispatch_events
-│   ├── pipeline.py                # begin_attempt / finalize_attempt (state transitions under locks)
-│   ├── service.py                 # submit_job, retry_from_dlq, list_dlq, list_attempts
-│   ├── repository.py              # DB access helpers for jobs and attempts
-│   ├── registry.py                # Executor registry (@register decorator, get_executor)
-│   ├── dispatch.py                # CeleryJobDispatcher / NoopJobDispatcher (switchable)
-│   ├── publish.py                 # Outbox → dispatcher bridge
-│   ├── ports.py                   # JobSubmitter Protocol (dependency inversion)
-│   ├── types.py                   # ExecutionResult, JobContext, AttemptResult, Executor
-│   ├── models.py                  # Job, JobAttempt ORM models
-│   ├── enums.py                   # JobStatus, AttemptStatus, JobEvent
-│   ├── exceptions.py              # JobError hierarchy + execution signal exceptions
-│   ├── messages.py                # Error message templates
-│   └── utils.py                   # load_executors, retry_countdown, task_log, is_eager
-│
-├── outbox/                        # Transactional outbox implementation
-│   ├── service.py                 # publish_pending_events, create_event, retry logic
-│   ├── repository.py              # DB access including claim_pending_batch_ids (SKIP LOCKED)
-│   ├── models.py                  # OutboxEvent ORM model
-│   ├── config.py                  # MAX_PUBLISH_RETRIES, backoff constants, batch limit
-│   ├── enums.py                   # OutboxStatus
-│   ├── events.py                  # Event type string constants
-│   ├── exceptions.py              # UnsupportedOutboxEventType
-│   ├── messages.py                # Error message helpers
-│   └── utils.py                   # publisher_log, backoff_delay_seconds, is_terminal_publish_error
-│
-├── db/                            # Database infrastructure
-│   ├── session.py                 # Engine, SessionLocal, get_db, get_uow
-│   ├── unit_of_work.py            # UnitOfWork context manager
-│   ├── base.py                    # SQLAlchemy declarative base
-│   ├── repository.py              # save(), save_and_refresh()
-│   ├── mixins.py                  # IdMixin (UUID PK), TimestampMixin
-│   ├── types.py                   # enum_value_type() helper
-│   ├── constants.py               # Column length constants
-│   └── utils.py                   # wait_for_db startup probe
-│
-├── core/
-│   ├── context.py                 # Request ID contextvars (X-Request-Id propagation)
-│   ├── enums.py                   # LogLevel
-│   ├── logging.py                 # build_log_extra() structured log helper
-│   └── utils.py                   # now_utc()
-│
-├── config/
-│   ├── settings.py                # Pydantic Settings (env vars)
-│   └── celery.py                  # Celery app, beat schedule, test eager mode
-│
-├── tests/
-│   ├── conftest.py                # Shared fixtures: db_session, uow, registry reset
-│   ├── factories.py               # create_job, run_job, create_report_with_job
-│   ├── utils.py                   # generate_idempotency_key
-│   ├── api/                       # HTTP-level API tests
-│   ├── jobs/                      # Pipeline integration tests (test_pipeline.py)
-│   ├── outbox/                    # Outbox behavior tests
-│   └── reports/                   # Reports domain tests (executors, service)
-│
-└── main.py                        # FastAPI app factory + lifespan
+├── api/        # FastAPI routers and HTTP layer
+├── apps/       # Domain applications (example: reports)
+├── jobs/       # Background job pipeline
+├── outbox/     # Transactional outbox publisher
+├── db/         # Database infrastructure
+├── core/       # Shared utilities (logging, metrics, context)
+├── config/     # Application configuration
+└── tests/      # Integration tests
 ```
 
 ---
 
 ## Job Execution Flow
 
-### 1. Submission (API → Database)
+### 1. Job Submission
 
-```
-POST /api/v1/reports
-  └─► reports_service.create_report()
-        └─► jobs_service.submit_job()
-              ├─► INSERT INTO jobs (status=pending, ...)
-              └─► INSERT INTO outbox_events (event_type=job.dispatch.requested, ...)
-              └─► COMMIT (both rows atomic)
-```
+Client requests that create background work (e.g. `POST /reports`)
+call the domain service which submits a job through `submit_job()`.
 
-### 2. Dispatch (Outbox Publisher → Celery)
+The submission transaction writes:
 
-```
-Celery Beat triggers publish_job_dispatch_events every 2 seconds
-  └─► outbox_service.publish_pending_events()
-        ├─► SELECT ... FOR UPDATE SKIP LOCKED  (claim batch)
-        ├─► COMMIT claim
-        └─► For each event:
-              ├─► SELECT ... FOR UPDATE         (re-claim per event)
-              ├─► dispatch_job(job_id)          (apply_async to Celery)
-              └─► UPDATE outbox_events SET status=published
-              └─► COMMIT per event
-```
+- a row in `jobs`
+- a dispatch event in `outbox_events`
 
-### 3. Execution (Celery Worker → Database)
+Both rows are committed atomically.
 
-```
-process_job(job_id)
-  └─► pipeline.begin_attempt()
-        ├─► SELECT jobs WHERE id=? FOR UPDATE
-        ├─► Skip if job is terminal or duplicate attempt
-        ├─► UPDATE jobs SET status=running, attempts=N
-        └─► INSERT INTO job_attempts (status=running, ...)
-  └─► executor = get_executor(job.job_type)
-  └─► executor(ctx, job.payload)           ← domain work inside UoW
-  └─► pipeline.finalize_attempt()
-        ├─► UPDATE job_attempts SET status=succeeded|failed, ...
-        └─► UPDATE jobs SET status=completed|dead|pending, ...
-  └─► COMMIT
-```
+---
 
-### 4. Retry / DLQ
+### 2. Outbox Dispatch
 
-```
-RetryableJobError raised by executor
-  └─► _classify_execution_error() → need_retry=True
-  └─► retry_countdown(n) = min(2^n, 60) seconds
-  └─► self.retry(countdown=N)             ← re-queued in Celery
-  └─► Next attempt: begin_attempt() creates attempt_no N+1
+A Celery Beat task runs every 2 seconds and publishes pending
+outbox events.
 
-After max_retries exhausted (default 3):
-  └─► job.status = dead
-  └─► Visible at GET /api/v1/jobs/dlq
+The publisher:
 
-Manual retry:
-  └─► POST /api/v1/jobs/{id}/retry
-        └─► job.status = pending
-        └─► New outbox event created
-        └─► Job re-dispatched on next outbox publish cycle
-```
+1. claims events using `SELECT ... FOR UPDATE SKIP LOCKED`
+2. dispatches jobs to Celery (`process_job`)
+3. marks the event as `published`
+
+Each event is committed independently to guarantee durability.
+
+---
+
+### 3. Job Execution
+
+Celery workers execute the `process_job` task.
+
+Execution proceeds as:
+
+1. acquire a row lock on the job
+2. create a `job_attempt` record
+3. invoke the registered executor
+4. finalize the attempt and update job state
+
+All state transitions happen inside a database transaction.
+
+---
+
+### 4. Retries and Dead Letter Queue
+
+Executors signal failure type by raising exceptions:
+
+- `RetryableJobError` → retry with exponential backoff
+- `NonRetryableJobError` → immediate DLQ
+
+Jobs exceeding `JOB_MAX_RETRIES` are moved to the dead letter queue.
+
+Operators can retry DLQ jobs manually via the API.
+
+---
+
+### 5. Stuck Job Recovery
+
+A periodic sweeper task runs every 60 seconds.
+
+Jobs stuck in `RUNNING` longer than `JOB_MAX_EXECUTION_SECONDS`
+are reset to `PENDING` and re-dispatched through the outbox.
 
 ---
 
@@ -216,7 +141,7 @@ Manual retry:
 |--------|------|-------------|
 | `GET` | `/api/v1/jobs/{id}` | Fetch a job by ID |
 | `GET` | `/api/v1/jobs/{id}/attempts` | Fetch attempt history for a job |
-| `GET` | `/api/v1/jobs/dlq` | List dead jobs (DLQ) |
+| `GET` | `/api/v1/jobs/dlq` | List dead jobs (DLQ). Supports `?limit` and `?cursor=<last_job_id>` for pagination |
 | `POST` | `/api/v1/jobs/{id}/retry` | Reset and re-enqueue a dead job |
 
 ### Reports
@@ -231,7 +156,8 @@ Manual retry:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/healthz` | Liveness probe |
-| `GET` | `/readyz` | Readiness probe |
+| `GET` | `/readyz` | Readiness probe (verifies DB connectivity) |
+| `GET` | `/metrics` | Prometheus metrics endpoint |
 
 ---
 
@@ -249,10 +175,10 @@ make up
 
 This starts:
 - `postgres` — PostgreSQL 16
-- `redis` — Redis 7
-- `api` — FastAPI app (with auto-migration on startup)
+- `redis` — Redis 7 (Celery broker and result backend)
+- `api` — FastAPI app (runs Alembic migrations on startup)
 - `worker` — Celery worker
-- `beat` — Celery Beat scheduler (outbox publisher)
+- `beat` — Celery Beat scheduler (outbox publisher + sweeper)
 
 ### Run Database Migrations Only
 
@@ -272,13 +198,40 @@ make reset
 
 All configuration is loaded from environment variables (or a `.env` file). Defaults are suitable for local development.
 
+### Core Settings
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql+psycopg://app:app@localhost:5432/app` | PostgreSQL connection string |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string (Celery broker/backend) |
 | `ENVIRONMENT` | `dev` | Runtime environment. Set to `test` to enable Celery eager mode |
-| `JOB_DISPATCHER` | `celery` | Dispatcher implementation. Set to `noop` to skip actual Celery dispatch (used in tests) |
-| `JOB_EXECUTORS` | `["src.apps.reports.executors"]` | List of executor modules to import at worker startup |
+| `JOB_DISPATCHER` | `celery` | Dispatcher implementation. Set to `noop` to skip Celery dispatch (used in tests) |
+| `JOB_EXECUTORS` | `["src.apps.reports.executors"]` | Executor modules to import at worker startup |
+
+### Job Execution Tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JOB_MAX_RETRIES` | `3` | Maximum retry attempts before DLQ |
+| `JOB_DEFAULT_RETRY_DELAY` | `2` | Base retry delay in seconds |
+| `JOB_RETRY_BACKOFF_BASE` | `2` | Exponential backoff base |
+| `JOB_RETRY_BACKOFF_CAP_SECONDS` | `60` | Maximum retry delay cap in seconds |
+| `JOB_MAX_EXECUTION_SECONDS` | `300` | Time after which a RUNNING job is considered stuck |
+
+### Outbox and Sweeper Tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OUTBOX_PUBLISH_INTERVAL_SECONDS` | `2.0` | How often the outbox publisher runs |
+| `STUCK_JOB_SWEEP_INTERVAL_SECONDS` | `60.0` | How often the stuck-job sweeper runs |
+
+### Database Connection Pool
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_POOL_SIZE` | `5` | Number of persistent connections in the pool |
+| `DB_MAX_OVERFLOW` | `10` | Maximum extra connections above `DB_POOL_SIZE` |
+| `DB_POOL_TIMEOUT` | `30` | Seconds to wait for a connection before raising |
 
 ---
 
@@ -300,7 +253,7 @@ With `ENVIRONMENT=test`:
 - Celery runs in eager (synchronous) mode — no broker needed.
 - `JOB_DISPATCHER=noop` — `apply_async` is replaced with a no-op so tests control dispatch explicitly via `run_job()`.
 
-Tests are integration tests that run against a live database. Each test class/function uses an isolated `UnitOfWork` and the registry is reset between tests via the `_reset_registry` autouse fixture.
+Tests are integration tests that run against a live database. Each test uses an isolated `UnitOfWork` and the executor registry is reset between tests via the `_reset_registry` autouse fixture.
 
 ---
 
@@ -316,27 +269,34 @@ celery -A src.config.celery.celery worker -l INFO
 
 ### Celery Beat
 
-Runs the outbox publisher on a 2-second schedule.
+Runs the outbox publisher and stuck-job sweeper on their configured schedules.
 
 ```bash
 celery -A src.config.celery.celery beat -l INFO
 ```
 
-Worker configuration:
+**Important**: Run exactly one Celery Beat instance. Multiple Beat instances will cause duplicate scheduling attempts. The outbox per-event lock and status re-check prevent actual double dispatch, but running multiple Beat instances is not a supported configuration.
+
+### Worker Configuration
 
 | Setting | Value | Purpose |
 |---------|-------|---------|
 | `task_acks_late` | `True` | Acknowledge tasks after execution (prevents loss on worker crash) |
+| `task_acks_on_failure_or_timeout` | `False` | Nack on unhandled failure — broker requeues the task instead of silently consuming it |
 | `worker_prefetch_multiplier` | `1` | Prevents task hoarding per worker process |
-| `max_retries` | `3` | Maximum retries before DLQ |
-| `default_retry_delay` | `2s` | Base retry delay |
-| Retry backoff | `min(2^n, 60)s` | Exponential backoff, capped at 60 seconds |
+
+### Beat Tasks
+
+| Task | Schedule | Purpose |
+|------|----------|---------|
+| `publish_job_dispatch_events` | Every 2 seconds | Reads pending outbox events and dispatches to Celery |
+| `reset_stuck_running_jobs` | Every 60 seconds | Recovers jobs stuck in RUNNING beyond `JOB_MAX_EXECUTION_SECONDS` |
 
 ---
 
 ## Adding a New Job Type
 
-1. Create an executor function in your domain module:
+### 1. Create an executor function
 
 ```python
 # src/apps/myapp/executors.py
@@ -346,14 +306,16 @@ from src.jobs.exceptions import NonRetryableJobError, RetryableJobError
 
 @register("myapp.do_something")
 def do_something(ctx: JobContext, payload: dict) -> ExecutionResult:
-    # ctx.uow — active UnitOfWork (transaction)
+    # ctx.uow — active UnitOfWork (transaction shared with job infrastructure)
     # ctx.job_id, ctx.attempt_no, ctx.request_id
-    # Raise NonRetryableJobError for permanent failures
-    # Raise RetryableJobError for transient failures
+    # Raise NonRetryableJobError for permanent failures (bad payload, missing data)
+    # Raise RetryableJobError for transient failures (network, temporary DB issues)
     return ExecutionResult(result={"done": True})
 ```
 
-2. Add your executor module to `JOB_EXECUTORS` in settings:
+### 2. Register the executor module
+
+Add it to `JOB_EXECUTORS` in your settings or environment:
 
 ```python
 job_executors: list[str] = [
@@ -362,7 +324,7 @@ job_executors: list[str] = [
 ]
 ```
 
-3. Submit jobs from your application service:
+### 3. Submit jobs from your application service
 
 ```python
 from src.jobs.service import submit_job
@@ -378,37 +340,74 @@ job = submit_job(
 
 ---
 
+## Observability
+
+### Structured Logs
+
+All pipeline events are logged with structured fields using `build_log_extra()`. Every log entry includes `component`, `event`, `job_id`, `attempt_no`, and `request_id` (when available). The `request_id` is propagated from the HTTP `X-Request-Id` header through the outbox payload and into the Celery task headers, allowing full correlation of a client request through its async execution chain.
+
+| Event | Level | When |
+|-------|-------|------|
+| `job_attempt_begin` | INFO | Task starts executing |
+| `job_attempt_noop` | INFO | Job already terminal or duplicate invocation |
+| `job_attempt_succeeded` | INFO | Executor completed successfully |
+| `job_retry_needed` | WARNING | Retryable error, retry pending |
+| `job_retry_scheduled` | WARNING | Retry countdown dispatched |
+| `job_moved_to_dlq` | ERROR | Job moved to dead state |
+| `job_finalize_failed` | ERROR | Attempt finalization failed — job may be stuck in RUNNING until sweeper recovers it |
+| `outbox_event_claimed` | INFO | Outbox event picked up for publishing |
+| `outbox_event_published` | INFO | Dispatch successful |
+| `outbox_event_retry_scheduled` | WARNING | Publish failed, retry scheduled |
+| `outbox_event_failed` | ERROR | Publish exhausted retries or unsupported type |
+
+### Prometheus Metrics
+
+Exposed at `GET /metrics` (Prometheus text format):
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `job_attempts_total` | Counter | `job_type`, `status` | Total job execution attempts by outcome |
+| `job_duration_seconds` | Histogram | `job_type` | Executor execution latency |
+| `outbox_events_total` | Counter | `outcome` | Outbox event outcomes (published, failed, pending) |
+
+---
+
 ## Key Design Decisions
 
 ### Transactional Outbox (not direct enqueue)
 
-Job rows and dispatch events are written atomically. This guarantees that a dispatched job always has a corresponding database record, and that a committed job is always eventually dispatched — even across process crashes.
+Job rows and dispatch events are written atomically to PostgreSQL. This guarantees that a committed job is always eventually dispatched — even across process crashes between the DB commit and the broker enqueue. The cost is a maximum 2-second dispatch latency and the operational requirement to run Celery Beat reliably.
 
 ### Row-Level Locking for Concurrency Safety
 
-`begin_attempt` uses `SELECT ... FOR UPDATE` on the job row and relies on a `UNIQUE(job_id, attempt_no)` constraint on `job_attempts` to safely handle concurrent duplicate task invocations. Duplicate attempts return `should_run=False` without an error.
+`begin_attempt` uses `SELECT ... FOR UPDATE` on the job row. A `UNIQUE(job_id, attempt_no)` database constraint provides a hard backstop against concurrent duplicate task executions. Duplicate invocations return `should_run=False` — they are silently and safely deduplicated.
 
 ### Executor Registry (not hardcoded dispatch)
 
-The job type to executor mapping is resolved at runtime via a registry, allowing domains to register handlers without the pipeline needing to know about them. Executor modules are imported at worker startup via `JOB_EXECUTORS`.
+The job type to executor mapping is resolved at runtime via a registry, allowing domains to register handlers without the pipeline needing to know about them. Executor modules are imported at worker startup via the `JOB_EXECUTORS` setting.
 
 ### UnitOfWork in Executor Context
 
-Executors receive an active `UnitOfWork` in their context. Domain updates (e.g. marking a report as ready) happen within the same transaction as the job state finalization — providing atomic domain + job state updates.
+Executors receive an active `UnitOfWork` in their context. Domain updates (e.g., marking a report as ready) happen within the same transaction as the job state finalization — providing atomic domain + infrastructure state consistency.
 
-### Separate `RUNNING` → `DEAD` vs Retry Paths
+### Error Classification Via Typed Exceptions
 
-Error classification is explicit: `RetryableJobError` signals a transient failure (retry until max, then DLQ), `NonRetryableJobError` signals an immediate DLQ transition, and unclassified exceptions propagate (causing Celery to re-queue the task based on the worker configuration).
+Executors signal intent through exception type, not return codes:
+- `RetryableJobError` — transient failure, retry until `max_retries`, then DLQ
+- `NonRetryableJobError` — permanent failure, DLQ immediately
+- `ExecutorNotRegistered` — unknown job type, DLQ immediately
+
+### Idempotency via Partial Unique Index
+
+`UNIQUE(idempotency_key) WHERE NOT NULL` allows multiple rows with `NULL` while enforcing uniqueness for non-null keys. The submission path uses an optimistic insert with `IntegrityError` fallback to handle concurrent duplicate submissions safely.
 
 ---
 
-## Limitations and Known Gaps
+## Limitations
 
-- **No stuck-RUNNING recovery**: If a worker is killed after `begin_attempt` but before `finalize_attempt`, the job remains in `RUNNING` state permanently. A periodic watchdog task to reset stuck jobs is not yet implemented.
-- **No metrics**: There are no Prometheus or StatsD hooks for monitoring job throughput, failure rates, or DLQ size.
-- **Single outbox publisher**: The Celery Beat scheduler runs on a single instance. Multiple Beat instances are not safe without external coordination.
+- **Single Celery Beat instance**: Multiple Beat instances are not supported without external coordination. Beat is a single point of scheduling.
 - **No per-attempt result storage**: Only the final job result is persisted; intermediate attempt results are not stored.
-- **No DLQ pagination cursor**: `GET /api/v1/jobs/dlq` supports a `limit` parameter but not cursor-based pagination.
+- **No webhook or push notifications**: Job completion is poll-based. There is no webhook or event push when a job completes or fails.
 
 ---
 
