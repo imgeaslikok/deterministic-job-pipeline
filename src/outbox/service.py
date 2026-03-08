@@ -220,6 +220,12 @@ def _publish_single_event(
         return False
 
     try:
+        # AT-LEAST-ONCE DELIVERY: dispatch may succeed here, but marking the
+        # event as published or the caller's later commit may still fail.
+        # In that case, the next publisher tick may re-process this event and
+        # dispatch it again. This is safe because the job pipeline enforces
+        # idempotent execution at begin_attempt, with database constraints as
+        # an additional backstop against duplicate processing.
         _publish_job_dispatch_event(
             event=event,
             dispatch_job=dispatch_job,
