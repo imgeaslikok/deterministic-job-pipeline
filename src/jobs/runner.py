@@ -191,6 +191,10 @@ def _run_executor(
             retry_reason = error
 
     except Exception:
+        # IMPORTANT: 'error' must be assigned here before the finally
+        # block runs. _safe_finalize_attempt reads it unconditionally.
+        # Moving this assignment after 'raise' would silently record
+        # error=None for unexpected exceptions.
         error = traceback.format_exc()
         job_status = JobStatus.DEAD
         event = JobEvent.MOVED_TO_DLQ
