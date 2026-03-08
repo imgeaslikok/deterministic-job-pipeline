@@ -12,7 +12,7 @@ import pytest
 
 from src.core.enums import LogLevel
 from src.core.utils import now_utc
-from src.jobs import pipeline
+from src.jobs import pipeline, runner
 from src.jobs import repository as repo
 from src.jobs.enums import AttemptStatus, JobEvent, JobStatus
 from src.jobs.exceptions import (
@@ -26,7 +26,12 @@ from src.jobs.exceptions import (
 )
 from src.jobs.registry import register
 from src.jobs.service import retry_from_dlq, submit_job
-from src.jobs.types import AttemptResult, ExecutionResult, _ErrorClassification
+from src.jobs.types import (
+    AttemptResult,
+    CeleryTaskContext,
+    ExecutionResult,
+    _ErrorClassification,
+)
 from src.tests.factories import run_job
 from src.tests.utils import generate_idempotency_key
 
@@ -200,11 +205,6 @@ def test_register_executor_raises_on_duplicate_job_type():
             return None
 
 
-# ---------------------------------------------------------------------------
-# AttemptResult invariant guard
-# ---------------------------------------------------------------------------
-
-
 def test_attempt_result_unwrap_returns_job_and_attempt_no():
     """unwrap() on a populated AttemptResult returns the job and attempt number."""
     job = MagicMock()
@@ -223,11 +223,6 @@ def test_attempt_result_unwrap_raises_on_missing_fields():
         result.unwrap()
 
 
-# ---------------------------------------------------------------------------
-# _ErrorClassification dataclass
-# ---------------------------------------------------------------------------
-
-
 def test_error_classification_fields_are_accessible_by_name():
     """_ErrorClassification fields should be accessible by name (not positional)."""
     cls = _ErrorClassification(
@@ -240,11 +235,6 @@ def test_error_classification_fields_are_accessible_by_name():
     assert cls.job_status == JobStatus.DEAD
     assert cls.need_retry is False
     assert cls.error == "boom"
-
-
-# ---------------------------------------------------------------------------
-# finalize_attempt invariant guard
-# ---------------------------------------------------------------------------
 
 
 def test_finalize_attempt_raises_when_attempt_row_missing(uow):
@@ -272,11 +262,6 @@ def test_finalize_attempt_raises_when_attempt_row_missing(uow):
         )
 
 
-# ---------------------------------------------------------------------------
-# retry_from_dlq error paths
-# ---------------------------------------------------------------------------
-
-
 def test_retry_from_dlq_raises_job_not_found_for_unknown_id(uow):
     """retry_from_dlq should raise JobNotFound for a non-existent job id."""
     with pytest.raises(JobNotFound):
@@ -295,3 +280,123 @@ def test_retry_from_dlq_raises_when_job_not_dead(uow):
 
     with pytest.raises(InvalidJobState):
         retry_from_dlq(uow, id=job.id)
+
+
+def test_run_executor_emits_metrics_on_success(uow):
+    """_run_executor should emit duration and attempts metrics on success."""
+
+    @register("demo.metrics-success")
+    def exec_success(ctx, payload):
+        return ExecutionResult(result={"ok": True})
+
+    job = submit_job(
+        uow,
+        job_type="demo.metrics-success",
+        payload={"x": 1},
+        idempotency_key=generate_idempotency_key("metrics-success"),
+    )
+    uow.commit()
+
+    duration_metric = MagicMock()
+    duration_labels = MagicMock(return_value=duration_metric)
+
+    attempts_metric = MagicMock()
+    attempts_labels = MagicMock(return_value=attempts_metric)
+
+    original_duration_labels = runner.JOB_DURATION_SECONDS.labels
+    original_attempts_labels = runner.JOB_ATTEMPTS_TOTAL.labels
+
+    runner.JOB_DURATION_SECONDS.labels = duration_labels
+    runner.JOB_ATTEMPTS_TOTAL.labels = attempts_labels
+
+    try:
+        outcome = runner._run_executor(
+            uow,
+            job=job,
+            attempt_no=1,
+            celery_ctx=CeleryTaskContext(
+                current_retries=0,
+                max_retries=3,
+                request_id="req-metrics-success",
+            ),
+        )
+    finally:
+        runner.JOB_DURATION_SECONDS.labels = original_duration_labels
+        runner.JOB_ATTEMPTS_TOTAL.labels = original_attempts_labels
+
+    assert outcome.need_retry is False
+    assert outcome.event == JobEvent.ATTEMPT_SUCCEEDED
+    assert outcome.level == LogLevel.INFO
+
+    duration_labels.assert_called_once_with(job_type="demo.metrics-success")
+    duration_metric.observe.assert_called_once()
+
+    attempts_labels.assert_called_once_with(
+        job_type="demo.metrics-success",
+        status=JobStatus.COMPLETED.value,
+    )
+    attempts_metric.inc.assert_called_once()
+
+
+def test_run_executor_emits_metrics_on_retryable_error(uow):
+    """_run_executor should emit duration and attempts metrics on retryable error."""
+
+    @register("demo.metrics-retry")
+    def exec_retry(ctx, payload):
+        raise RetryableJobError("transient failure")
+
+    job = submit_job(
+        uow,
+        job_type="demo.metrics-retry",
+        payload={},
+        idempotency_key=generate_idempotency_key("metrics-retry"),
+    )
+    uow.commit()
+
+    begin = pipeline.begin_attempt(
+        uow.session,
+        job_id=job.id,
+        started_at=now_utc(),
+    )
+    assert begin.should_run is True
+    locked_job, attempt_no = begin.unwrap()
+
+    duration_metric = MagicMock()
+    duration_labels = MagicMock(return_value=duration_metric)
+
+    attempts_metric = MagicMock()
+    attempts_labels = MagicMock(return_value=attempts_metric)
+
+    original_duration_labels = runner.JOB_DURATION_SECONDS.labels
+    original_attempts_labels = runner.JOB_ATTEMPTS_TOTAL.labels
+
+    runner.JOB_DURATION_SECONDS.labels = duration_labels
+    runner.JOB_ATTEMPTS_TOTAL.labels = attempts_labels
+
+    try:
+        outcome = runner._run_executor(
+            uow,
+            job=locked_job,
+            attempt_no=attempt_no,
+            celery_ctx=CeleryTaskContext(
+                current_retries=0,
+                max_retries=3,
+                request_id="req-metrics-retry",
+            ),
+        )
+    finally:
+        runner.JOB_DURATION_SECONDS.labels = original_duration_labels
+        runner.JOB_ATTEMPTS_TOTAL.labels = original_attempts_labels
+
+    assert outcome.need_retry is True
+    assert outcome.event == JobEvent.RETRY_NEEDED
+    assert outcome.level == LogLevel.WARNING
+
+    duration_labels.assert_called_once_with(job_type="demo.metrics-retry")
+    duration_metric.observe.assert_called_once()
+
+    attempts_labels.assert_called_once_with(
+        job_type="demo.metrics-retry",
+        status=JobStatus.PENDING.value,
+    )
+    attempts_metric.inc.assert_called_once()

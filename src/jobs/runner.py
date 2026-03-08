@@ -9,6 +9,7 @@ from the job execution orchestration logic.
 from __future__ import annotations
 
 import logging
+import time
 import traceback
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from src.config.celery import celery
 from src.config.settings import settings
 from src.core.context import REQUEST_ID_HEADER
 from src.core.enums import LogLevel
+from src.core.metrics import JOB_ATTEMPTS_TOTAL, JOB_DURATION_SECONDS
 from src.core.utils import now_utc
 from src.db.session import SessionLocal
 from src.db.unit_of_work import UnitOfWork
@@ -153,6 +155,8 @@ def _run_executor(
     need_retry = False
     retry_reason: str | None = None
 
+    _start = time.monotonic()
+
     try:
         executor = get_executor(job.job_type)
         exec_result: ExecutionResult | None = executor(
@@ -203,6 +207,13 @@ def _run_executor(
             error=error,
             result=result,
         )
+        JOB_DURATION_SECONDS.labels(job_type=job.job_type).observe(
+            time.monotonic() - _start
+        )
+        JOB_ATTEMPTS_TOTAL.labels(
+            job_type=job.job_type,
+            status=job_status.value,
+        ).inc()
 
     return AttemptOutcome(
         event=event,

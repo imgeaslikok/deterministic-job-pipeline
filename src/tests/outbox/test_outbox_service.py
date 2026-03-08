@@ -6,6 +6,8 @@ Verifies event creation and publishing behavior.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from sqlalchemy import select
 
 from src.core.utils import now_utc
@@ -274,3 +276,165 @@ def test_publish_pending_events_marks_event_failed_after_retry_limit(db_session,
     assert event.retry_count == MAX_PUBLISH_RETRIES
     assert event.next_attempt_at is None
     assert event.published_at is None
+
+
+def test_publish_pending_events_emits_published_metric(db_session, uow):
+    """Successful publish should increment the published outbox metric."""
+
+    from src.outbox import service
+
+    job = submit_job(
+        uow,
+        job_type="demo.outbox.metric.published",
+        payload={},
+        idempotency_key=generate_idempotency_key("outbox-metric-published"),
+        request_id="req-metric-published",
+    )
+    uow.commit()
+
+    metric = MagicMock()
+    labels = MagicMock(return_value=metric)
+
+    original_labels = service.OUTBOX_EVENTS_TOTAL.labels
+    service.OUTBOX_EVENTS_TOTAL.labels = labels
+
+    dispatched: list[tuple[str, str | None]] = []
+
+    def fake_dispatch(job_id: str, request_id: str | None) -> None:
+        dispatched.append((job_id, request_id))
+
+    try:
+        published_count = service.publish_pending_events(
+            SessionLocal,
+            dispatch_job=fake_dispatch,
+        )
+    finally:
+        service.OUTBOX_EVENTS_TOTAL.labels = original_labels
+
+    db_session.expire_all()
+
+    event = next(
+        e
+        for e in db_session.execute(select(OutboxEvent)).scalars().all()
+        if e.event_type == JOB_DISPATCH_REQUESTED
+        and (e.payload or {}).get("job_id") == job.id
+    )
+
+    assert published_count >= 1
+    assert (job.id, "req-metric-published") in dispatched
+    assert event.status == OutboxStatus.PUBLISHED
+
+    labels.assert_called_once_with(outcome=OutboxStatus.PUBLISHED.value)
+    metric.inc.assert_called_once()
+
+
+def test_publish_pending_events_emits_pending_metric_on_retry(db_session, uow):
+    """Retryable publish failure should increment the pending outbox metric."""
+
+    from src.outbox import service
+
+    job = submit_job(
+        uow,
+        job_type="demo.outbox.metric.pending",
+        payload={},
+        idempotency_key=generate_idempotency_key("outbox-metric-pending"),
+        request_id="req-metric-pending",
+    )
+    uow.commit()
+
+    metric = MagicMock()
+    labels = MagicMock(return_value=metric)
+
+    original_labels = service.OUTBOX_EVENTS_TOTAL.labels
+    service.OUTBOX_EVENTS_TOTAL.labels = labels
+
+    def failing_dispatch(job_id: str, request_id: str | None) -> None:
+        raise RuntimeError("dispatch failed")
+
+    try:
+        published_count = service.publish_pending_events(
+            SessionLocal,
+            dispatch_job=failing_dispatch,
+        )
+    finally:
+        service.OUTBOX_EVENTS_TOTAL.labels = original_labels
+
+    db_session.expire_all()
+
+    event = next(
+        e
+        for e in db_session.execute(select(OutboxEvent)).scalars().all()
+        if e.event_type == JOB_DISPATCH_REQUESTED
+        and (e.payload or {}).get("job_id") == job.id
+    )
+
+    assert published_count == 0
+    assert event.status == OutboxStatus.PENDING
+    assert event.error == "dispatch failed"
+    assert event.retry_count == 1
+
+    labels.assert_called_once_with(outcome=OutboxStatus.PENDING.value)
+    metric.inc.assert_called_once()
+
+
+def test_publish_pending_events_emits_failed_metric_after_retry_limit(db_session, uow):
+    """Terminal publish failure should increment the failed outbox metric."""
+    from src.outbox import service
+
+    job = submit_job(
+        uow,
+        job_type="demo.outbox.metric.failed",
+        payload={},
+        idempotency_key=generate_idempotency_key("outbox-metric-failed"),
+        request_id="req-metric-failed",
+    )
+    uow.commit()
+
+    metric = MagicMock()
+    labels = MagicMock(return_value=metric)
+
+    original_labels = service.OUTBOX_EVENTS_TOTAL.labels
+    service.OUTBOX_EVENTS_TOTAL.labels = labels
+
+    def failing_dispatch(job_id: str, request_id: str | None) -> None:
+        raise RuntimeError("temporary dispatch failure")
+
+    try:
+        for _ in range(MAX_PUBLISH_RETRIES + 1):
+            service.publish_pending_events(
+                SessionLocal,
+                dispatch_job=failing_dispatch,
+            )
+            db_session.expire_all()
+
+            event = next(
+                e
+                for e in db_session.execute(select(OutboxEvent)).scalars().all()
+                if e.event_type == JOB_DISPATCH_REQUESTED
+                and (e.payload or {}).get("job_id") == job.id
+            )
+
+            if event.status == OutboxStatus.PENDING:
+                event.next_attempt_at = None
+                db_session.commit()
+    finally:
+        service.OUTBOX_EVENTS_TOTAL.labels = original_labels
+
+    db_session.expire_all()
+
+    event = next(
+        e
+        for e in db_session.execute(select(OutboxEvent)).scalars().all()
+        if e.event_type == JOB_DISPATCH_REQUESTED
+        and (e.payload or {}).get("job_id") == job.id
+    )
+
+    assert event.status == OutboxStatus.FAILED
+    assert event.error == "temporary dispatch failure"
+    assert event.retry_count == MAX_PUBLISH_RETRIES
+
+    assert labels.call_count == MAX_PUBLISH_RETRIES + 1
+    assert labels.call_args_list[-1].kwargs == {
+        "outcome": OutboxStatus.FAILED.value,
+    }
+    assert metric.inc.call_count == MAX_PUBLISH_RETRIES + 1

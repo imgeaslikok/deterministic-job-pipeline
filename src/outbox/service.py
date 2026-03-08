@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from src.core.enums import LogLevel
+from src.core.metrics import OUTBOX_EVENTS_TOTAL
 from src.core.utils import now_utc
 from src.db.repository import save
 
@@ -112,6 +113,8 @@ def _handle_unsupported_event(db: Session, *, event: OutboxEvent) -> None:
         error=error,
     )
 
+    OUTBOX_EVENTS_TOTAL.labels(outcome=OutboxStatus.FAILED.value).inc()
+
     publisher_log(
         LogLevel.ERROR,
         OUTBOX_EVENT_FAILED,
@@ -173,6 +176,8 @@ def _handle_publish_failure(
             error=error,
         )
 
+        OUTBOX_EVENTS_TOTAL.labels(outcome=OutboxStatus.FAILED.value).inc()
+
         publisher_log(
             LogLevel.ERROR,
             OUTBOX_EVENT_FAILED,
@@ -187,6 +192,8 @@ def _handle_publish_failure(
         error=error,
         now=now_utc(),
     )
+
+    OUTBOX_EVENTS_TOTAL.labels(outcome=OutboxStatus.PENDING.value).inc()
 
     publisher_log(
         LogLevel.WARNING,
@@ -219,6 +226,9 @@ def _publish_single_event(
         )
 
         _mark_event_published(db, event=event)
+
+        OUTBOX_EVENTS_TOTAL.labels(outcome=OutboxStatus.PUBLISHED.value).inc()
+
         return True
 
     except Exception as exc:

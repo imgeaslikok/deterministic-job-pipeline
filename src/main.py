@@ -46,6 +46,13 @@ def create_app() -> FastAPI:
         """Readiness probe."""
         return {"status": "ready"}
 
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        from fastapi.responses import Response
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
     return app
 
 
