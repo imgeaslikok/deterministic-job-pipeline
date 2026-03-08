@@ -12,8 +12,14 @@ from src.config.settings import settings
 
 from .unit_of_work import UnitOfWork
 
-# Engine with connection health checks enabled
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+# Engine with connection health checks and configurable pool settings
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=settings.db_pool_timeout,
+)
 
 # Session factory (explicit transaction control)
 SessionLocal = sessionmaker(

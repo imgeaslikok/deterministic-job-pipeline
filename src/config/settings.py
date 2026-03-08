@@ -31,5 +31,9 @@ class Settings(BaseSettings):
     outbox_publish_interval_seconds: float = 2.0
     stuck_job_sweep_interval_seconds: float = 60.0
 
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout: int = 30
+
 
 settings = Settings()
