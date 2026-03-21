@@ -1,674 +1,591 @@
-# Architecture Documentation: deterministic-job-pipeline
+# Architecture — deterministic-job-pipeline
 
 ---
 
 ## 1. Architectural Style
 
-The system follows a **layered architecture with explicit domain boundaries**, organized into four layers:
+The system follows a **layered architecture with explicit domain boundaries**, structured into four layers:
 
-```text
+```
 ┌──────────────────────────────────────────────┐
-│                 API Layer                    │  HTTP, schemas, middleware, exception mapping
+│               API Layer                      │  HTTP, schemas, exception mapping
 ├──────────────────────────────────────────────┤
-│             Application Layer                │  Use cases, domain orchestration, UoW boundaries
+│           Application Layer                  │  Domain services, use cases, UoW boundaries
 ├──────────────────────────────────────────────┤
-│      Job Pipeline / Outbox / Persistence     │  Reliable execution, dispatch, repositories
+│  Job Pipeline / Outbox / Repositories        │  Infrastructure, state machines, persistence
 ├──────────────────────────────────────────────┤
-│            Database / Broker Layer           │  PostgreSQL, Redis / Celery
+│         Database / Broker                    │  PostgreSQL, Redis / Celery
 └──────────────────────────────────────────────┘
 ```
 
-The codebase is not strict hexagonal architecture. Instead, it applies **selective abstraction** where the coupling risk is highest: the `JobSubmitter` protocol in `src/jobs/ports.py` allows the reports domain to depend on a callable interface rather than a concrete job service implementation.
+The architecture is not hexagonal in the strict sense — ports and adapters are not systematically applied across every boundary. Instead, the system uses **selective port abstraction** at the highest-coupling point: the `JobSubmitter` Protocol in [src/jobs/ports.py](src/jobs/ports.py) allows domain code in `src/apps/` to depend on a callable interface rather than a concrete import from the jobs service. This is the correct tradeoff: full hexagonal purity would add indirection without benefit at this project's scale.
 
-The project also uses DDD vocabulary pragmatically rather than formally. There are no rich aggregate roots, but there are clear domain modules, domain exceptions, domain enums, and application services with explicit transaction boundaries.
-
----
-
-## 2. Major Layers and Responsibilities
-
-### 2.1 API Layer (`src/api/`)
-
-**Responsibility**: Translate HTTP requests into application service calls and map domain exceptions back to HTTP responses.
-
-The API layer is intentionally thin:
-
-- routers deserialize input and serialize output
-- request middleware assigns or propagates `X-Request-Id`
-- exception handlers are registered at startup
-- routers delegate business work to service modules
-
-Exception registration is auto-discovered through `src/api/common/exception_registry.py`, which scans API packages for modules exposing a `register(app)` function. This keeps exception mapping close to the API module it belongs to.
-
-**Dependency direction**: `API -> application services`
+Domain-Driven Design vocabulary is applied pragmatically. There are no aggregates with in-memory invariant enforcement, but domain exceptions, domain services, domain-specific enums, and bounded context isolation are all present and consistently applied.
 
 ---
 
-### 2.2 Application Layer (`src/apps/`, `src/jobs/service.py`)
+## 2. Layer Responsibilities
 
-**Responsibility**: Orchestrate use cases inside explicit transaction boundaries.
+### 2.1 API Layer — `src/api/`
 
-The reports domain is the clearest example. `src/apps/reports/service.py:create_report()` performs:
+**Responsibility**: Translate HTTP into application service calls. Map domain results and exceptions to HTTP responses.
 
-1. lookup by idempotency key
-2. report creation with race-safe recovery
-3. job submission
-4. job attachment to the report
+The API layer is intentionally thin. Routers extract validated parameters, open a `UnitOfWork`, call a domain service, and serialize the result. No business logic lives in routers.
 
-All of these happen inside the same `UnitOfWork`, so they either commit together or roll back together.
+Exception handlers in `api/v1/{domain}/exceptions.py` are **auto-discovered** at startup via `exception_registry.py`, which scans API version packages for modules exposing a `register(app)` function. This means adding a new domain's exception handlers requires only placing the handler file in the right location — no changes to central configuration.
 
-The jobs application service in `src/jobs/service.py` owns job submission and operational workflows such as:
+**Dependency direction**: `API → Application services`. Never the reverse.
 
-- submit a new job
-- retry a dead job from DLQ
-- inspect a job
-- list attempt history
+### 2.2 Application Layer — `src/apps/`, `src/jobs/service.py`
 
----
+**Responsibility**: Orchestrate domain operations within explicit transaction boundaries. Coordinate between domain objects and shared infrastructure services (job submission, outbox).
 
-### 2.3 Job Pipeline Layer (`src/jobs/`)
+`reports/service.py::create_report` is the canonical example of an application service:
 
-**Responsibility**: Reliable job lifecycle management.
+```
+create_report(uow, idempotency_key, request_id, submit_job)
+  ├─ Check for existing report by idempotency_key  (read, no lock)
+  ├─ Create report row with begin_nested() + IntegrityError fallback
+  ├─ submit_job(uow, ...)                           (creates job row + outbox event)
+  └─ _attach_job_to_report(uow.session, ...)        (under SELECT FOR UPDATE)
+```
 
-This is the core infrastructure of the project.
+All four steps happen within the same `UnitOfWork`. They commit together or roll back together. This is the correct scope for an application service: one use case, one transaction boundary.
 
-| Module | Responsibility |
-|--------|----------------|
-| `service.py` | Application-facing job operations |
-| `pipeline.py` | State transition helpers such as `begin_attempt`, `finalize_attempt`, `reset_stuck_running_jobs` |
-| `runner.py` | Runtime orchestration for execution, classification, finalization, and retry scheduling |
-| `tasks.py` | Celery task entrypoints |
-| `registry.py` | Maps job types to executor callables |
-| `dispatch.py` | Dispatch abstraction (`CeleryJobDispatcher`, `NoopJobDispatcher`) |
-| `publish.py` | Adapter between the outbox publisher and the dispatcher |
-| `repository.py` | Job and attempt persistence helpers |
+`jobs/service.py` manages the jobs domain: submit, retry from DLQ, inspect. It is consumed both by domain application services (via the `JobSubmitter` protocol) and by the API layer directly for read operations.
 
-The pipeline is deliberately **domain-agnostic**. It does not import from `src/apps/`. Domains integrate by registering executor functions.
+### 2.3 Job Pipeline — `src/jobs/`
 
----
+**Responsibility**: Reliable job lifecycle management — dispatch, execution, attempt tracking, retry, DLQ. This is the core infrastructure of the project and is entirely domain-agnostic.
 
-### 2.4 Transactional Outbox (`src/outbox/`)
+| Module | Role |
+|--------|------|
+| `service.py` | Application-facing API: submit, retry, inspect |
+| `pipeline.py` | Low-level state machine: `begin_attempt`, `finalize_attempt`, `reset_stuck_running_jobs` |
+| `runner.py` | Execution orchestration: resolve context → begin → run → finalize → schedule retry |
+| `tasks.py` | Thin Celery entrypoints; delegates entirely to runner |
+| `registry.py` | Executor registry: maps job type strings to callable handlers |
+| `dispatch.py` | Abstraction over the dispatch mechanism (Celery or Noop) |
+| `publish.py` | Bridge from outbox service to the job dispatcher |
 
-**Responsibility**: Make dispatch intent durable before broker enqueue.
+The pipeline does not import from `src/apps/`. Domains integrate by registering executor functions at worker startup via the `JOB_EXECUTORS` setting. This inversion is the central extensibility mechanism.
 
-The outbox writes an `OutboxEvent` in the same database transaction as the job row. A periodic publisher later reads pending events and dispatches them to Celery.
+### 2.4 Transactional Outbox — `src/outbox/`
 
-The outbox module is generic at the data model level: it stores `event_type`, `payload`, retry metadata, and publication state. In this project, the only event type currently used is `JOB_DISPATCH_REQUESTED`.
+**Responsibility**: Guarantee eventual delivery of job dispatch events to the Celery broker, independent of broker availability at submission time.
 
----
+The outbox is an independent infrastructure module. It operates on generic `OutboxEvent` rows — it does not know about jobs specifically. The `_publish_single_event` function dispatches on `event.event_type`; `JOB_DISPATCH_REQUESTED` is the only type currently handled, but the switch is extensible.
 
-### 2.5 Database Infrastructure (`src/db/`)
+### 2.5 Database Infrastructure — `src/db/`
 
-**Responsibility**: Shared database primitives.
+**Responsibility**: Shared database primitives: session management, the Unit-of-Work abstraction, shared mixins (UUIDs, timestamps), and shared repository helpers.
 
-This layer provides:
-
-- SQLAlchemy base and mixins
-- session management
-- `UnitOfWork`
-- shared repository helpers
-- utility functions for startup readiness
-
-It stays intentionally small. Domain-specific repository logic lives in the corresponding domain packages.
+This layer is deliberately minimal. There is no generic base repository class — just shared helper functions (`save`, `save_and_refresh`) and mixins. Domain-specific repository modules live alongside their respective domain models.
 
 ---
 
 ## 3. Dependency Direction
 
-```text
-src/api/v1/*
-    └──> src/apps/reports/service
-    └──> src/jobs/service
-              │
-              └──> src/jobs/ports.JobSubmitter (used by reports)
-              │
-              └──> src/outbox/service
-              │
-              └──> src/jobs/repository / src/jobs/pipeline / src/jobs/runner
-                              │
-                              └──> src/db/unit_of_work
-                                      │
-                                      └──> src/db/session
-                                              │
-                                              └──> PostgreSQL
+```
+api/v1/
+  └─► apps/reports/service (via JobSubmitter Protocol)
+            │
+            ▼
+       jobs/service  ◄──────────── jobs/pipeline
+            │                           │
+            ▼                           ▼
+       outbox/service              jobs/repository
+            │
+            ▼
+       db/unit_of_work
+            │
+            ▼
+        db/session
+            │
+            ▼
+        PostgreSQL
 ```
 
-Key rules maintained by the codebase:
+- `api/` never imports from `apps/` directly in routers (it receives them via DI).
+- `apps/` modules depend on `jobs/` only via the `JobSubmitter` Protocol.
+- `jobs/` depends on `outbox/` for event creation; `outbox/` does not depend on `jobs/`.
+- `db/` has no upward dependencies.
 
-- API code depends on services, not the reverse.
-- `src/apps/reports` depends on job submission through the `JobSubmitter` protocol.
-- `src/jobs` depends on `src/outbox`, but `src/outbox` does not depend on `src/jobs`.
-- `src/db` has no upward dependency on application modules.
-
-### Runtime import note
-
-There is a runtime dependency between `dispatch.py` and `tasks.py` because Celery dispatch needs the `process_job` task reference. This is handled safely with a **deferred import inside `CeleryJobDispatcher.dispatch()`**, avoiding a fragile module-level circular import.
+**Circular import resolved**: `dispatch.py` previously imported `process_job` at module level from `tasks.py`, creating a within-package circular dependency resolved only by Python's import ordering. The import is now deferred inside `CeleryJobDispatcher.dispatch()`, which breaks the cycle at the module level. The dependency is still present at runtime, but it is now explicit and safe.
 
 ---
 
 ## 4. Data Flow and Control Flow
 
-### 4.1 Job Submission Flow
+### 4.1 Job Submission
 
-```text
+```
 HTTP POST /api/v1/reports
   │
-  ├─ RequestIdMiddleware assigns or propagates X-Request-Id
+  ├─ RequestIdMiddleware assigns X-Request-Id
   │
-  ├─ reports router opens UnitOfWork via get_uow()
+  ├─ reports router: get_uow() → UnitOfWork, extract headers
   │
-  ├─ reports_service.create_report(uow, idempotency_key, request_id, submit_job)
+  ├─ reports_service.create_report(uow, idempotency_key, request_id, submit_job=submit_job)
   │     │
-  │     ├─ check existing report by idempotency key
-  │     ├─ create report row with begin_nested() + IntegrityError fallback
-  │     ├─ submit_job(...)
-  │     │     ├─ create job row with begin_nested() + IntegrityError fallback
-  │     │     └─ create outbox event JOB_DISPATCH_REQUESTED
-  │     └─ attach job_id to report under SELECT FOR UPDATE
+  │     ├─ _get_existing_report_by_idempotency_key()    (non-locking fast path)
+  │     ├─ _create_report_with_recovery()               (begin_nested + IntegrityError fallback)
+  │     ├─ submit_job(uow, job_type, payload, ...)
+  │     │     ├─ _create_job_row()                      (begin_nested + IntegrityError fallback)
+  │     │     └─ outbox_service.create_event(JOB_DISPATCH_REQUESTED, {job_id, request_id})
+  │     └─ _attach_job_to_report()                      (SELECT FOR UPDATE)
   │
-  └─ UnitOfWork exits -> COMMIT
-       report row + job row + outbox event are persisted atomically
+  └─ uow.__exit__() → COMMIT
+       (report row + job row + outbox event — all atomic)
 ```
 
----
+### 4.2 Dispatch
 
-### 4.2 Outbox Dispatch Flow
-
-```text
-Celery Beat task: publish_job_dispatch_events()
+```
+Celery Beat (every 2s) → publish_job_dispatch_events()
   │
-  └─ outbox.service.publish_pending_events(SessionLocal, dispatch_job)
+  └─ outbox_service.publish_pending_events(SessionLocal, dispatch_job)
        │
-       ├─ Phase 1: collect pending event ids
-       │     SELECT ... FOR UPDATE SKIP LOCKED
-       │     WHERE status = pending
-       │       AND (next_attempt_at IS NULL OR next_attempt_at <= now)
-       │     ORDER BY created_at, id
-       │     LIMIT batch_size
-       │   -> COMMIT
+       ├─ Phase 1 — Batch claim (one session):
+       │     SELECT id FROM outbox_events
+       │     WHERE status=pending AND (next_attempt_at IS NULL OR next_attempt_at <= now)
+       │     ORDER BY created_at ASC, id ASC
+       │     FOR UPDATE SKIP LOCKED
+       │     LIMIT 100
+       │   → COMMIT  (releases lock, no claim persisted — this is ID collection only)
        │
-       └─ Phase 2: process each event independently
-             ├─ SELECT event FOR UPDATE
-             ├─ verify still pending
-             ├─ dispatch_job(job_id, request_id)
-             ├─ mark outbox event as published
+       └─ Phase 2 — Per-event processing (separate session per event):
+             ├─ SELECT ... FOR UPDATE  (re-acquire exclusive lock)
+             ├─ Verify status == PENDING  (guard against concurrent publisher)
+             ├─ CeleryJobDispatcher.dispatch(job_id, request_id)
+             │     └─ process_job.apply_async(args=(job_id,), headers={X-Request-Id: ...})
+             ├─ UPDATE outbox_events SET status=published, published_at=now
              └─ COMMIT per event
 ```
 
-Important characteristics of this design:
+The two-phase design is deliberate: Phase 1 collects IDs efficiently (SKIP LOCKED avoids contention on already-processing events), commits to release locks, then Phase 2 processes each event independently so a failure on event N does not affect events N+1..M.
 
-- `SKIP LOCKED` avoids contention between publishers
-- each event is committed independently
-- a failure on one event does not roll back already-published events
-- if dispatch succeeds but the publish transaction fails, the event may be retried later, so dispatch is **at-least-once**
+### 4.3 Execution
 
----
-
-### 4.3 Job Execution Flow
-
-```text
-Celery worker receives process_job(job_id)
+```
+Celery Worker → process_job(job_id)
   │
-  ├─ tasks.process_job() delegates to runner.run_process_job()
+  ├─ _resolve_celery_context(task)
+  │     └─ Extracts current_retries, max_retries, request_id from task.request
   │
-  ├─ runner resolves Celery context
-  │     ├─ current_retries
-  │     ├─ max_retries
-  │     └─ request_id from task headers
+  ├─ Log ATTEMPT_BEGIN (job_id, request_id, retry count)
   │
-  ├─ open database session
+  ├─ Open SessionLocal
   │
-  └─ with UnitOfWork(db) as uow:
-        │
-        ├─ pipeline.begin_attempt(...)
-        │     ├─ SELECT job FOR UPDATE
-        │     ├─ if job terminal -> noop
-        │     ├─ set job status = RUNNING
-        │     ├─ increment attempts
-        │     └─ insert JobAttempt row
-        │
-        ├─ resolve executor from registry
-        │
-        ├─ execute domain handler
-        │     └─ domain writes happen inside the same UnitOfWork
-        │
-        ├─ classify outcome
-        │     ├─ success -> COMPLETED
-        │     ├─ RetryableJobError -> PENDING + retry
-        │     ├─ NonRetryableJobError -> DEAD
-        │     ├─ ExecutorNotRegistered -> DEAD
-        │     └─ unknown exception -> re-raise
-        │
-        └─ _safe_finalize_attempt()
-              └─ finalize attempt + update job state inside begin_nested()
+  └─ _execute_job_attempt(db, job_id, started_at, celery_ctx)
+       │
+       └─ with UnitOfWork(db) as uow:
+             │
+             ├─ pipeline.begin_attempt(uow.session, job_id, started_at)
+             │     ├─ SELECT jobs WHERE id=? FOR UPDATE   (row lock)
+             │     ├─ if COMPLETED or DEAD → return AttemptResult(should_run=False, "terminal")
+             │     ├─ attempt_no = job.attempts + 1
+             │     ├─ UPDATE jobs SET status=running, attempts=attempt_no
+             │     ├─ INSERT job_attempts (attempt_no, status=running, started_at)
+             │     └─ db.flush()  → IntegrityError on duplicate → AttemptResult(False, "duplicate")
+             │
+             ├─ if not should_run → return NOOP outcome
+             │
+             └─ _run_executor(uow, job, attempt_no, celery_ctx)
+                   │
+                   ├─ get_executor(job.job_type)           (raises ExecutorNotRegistered if missing)
+                   │
+                   ├─ executor(JobContext(uow, job_id, attempt_no, request_id), payload)
+                   │     └─ Domain work within the same UoW transaction
+                   │
+                   ├─ On success: attempt_status=SUCCEEDED, job_status=COMPLETED
+                   ├─ On RetryableJobError: classify → retry or DLQ (if retries exhausted)
+                   ├─ On NonRetryableJobError: → DLQ immediately
+                   ├─ On ExecutorNotRegistered: → DLQ immediately
+                   ├─ On unexpected Exception: capture traceback, re-raise
+                   │
+                   └─ finally: _safe_finalize_attempt(uow.session, ...)
+                         └─ with db.begin_nested():         (savepoint)
+                               ├─ UPDATE job_attempts SET status, error, finished_at
+                               └─ UPDATE jobs SET status, last_error, result
+                         → metrics emitted: JOB_DURATION_SECONDS, JOB_ATTEMPTS_TOTAL
 ```
 
-If the outcome requires retry, `runner` schedules `self.retry(...)` with exponential backoff and full jitter.
+### 4.4 Retry and DLQ
+
+```
+need_retry=True:
+  ├─ In eager mode (tests): task.apply(args, retries=current+1)
+  └─ In normal mode: raise task.retry(exc=..., countdown=retry_countdown(n))
+       └─ retry_countdown(n) = random.randint(0, min(2^n * base, cap))
+              (full jitter exponential backoff, default cap 60s)
+
+need_retry=False (DLQ):
+  ├─ job.status = DEAD persisted via finalize_attempt
+  └─ task returns normally (no retry raised)
+
+Manual retry via POST /api/v1/jobs/{id}/retry:
+  ├─ SELECT FOR UPDATE (prevent double-retry race)
+  ├─ Validate status == DEAD
+  ├─ UPDATE jobs SET status=pending, last_error=None, result=None
+  └─ INSERT outbox_event (JOB_DISPATCH_REQUESTED)
+```
+
+### 4.5 Stuck Job Recovery
+
+```
+Celery Beat (every 60s) → reset_stuck_running_jobs()
+  │
+  └─ pipeline.reset_stuck_running_jobs(db, max_execution_seconds=300)
+       │
+       ├─ SELECT jobs WHERE status=running AND updated_at < now - 300s
+       │   LIMIT 50
+       │
+       └─ For each stuck job:
+             ├─ UPDATE jobs SET status=pending, last_error="Reset from RUNNING by sweeper"
+             └─ INSERT outbox_event (JOB_DISPATCH_REQUESTED, {job_id})
+       └─ COMMIT
+```
 
 ---
 
-## 5. Async Processing Model
+## 5. Transaction Boundaries
 
-The async stack is:
+There are three distinct transaction scopes in the system.
 
-- **API process**: writes domain state, job row, and outbox row to PostgreSQL
-- **Celery Beat**: publishes pending outbox events to Redis
-- **Celery worker**: consumes `process_job` tasks
-- **PostgreSQL**: source of truth for job state and coordination
-- **Redis**: broker and result backend for Celery
-
-This project does **not** use `asyncio` for worker execution. The worker pipeline is fully synchronous, which matches the current workload well because:
-
-- coordination is database-centric
-- SQLAlchemy usage is sync
-- concurrency comes from Celery worker processes, not coroutines
-
-FastAPI uses `run_in_threadpool()` only for startup/readiness checks.
-
----
-
-## 6. Transaction Boundaries
-
-### 6.1 API Request Transaction
+### 5.1 API Request Transaction
 
 ```python
 with UnitOfWork(db) as uow:
-    report = create_report(...)
+    result = service_function(uow, ...)
+# Commits on clean exit, rolls back on exception
 ```
 
-This transaction covers the full write use case:
+Covers the full application service use case. For report creation: report row + job row + outbox event — all or nothing. This is the atomicity guarantee that makes the outbox pattern safe: the dispatch event is only created if the domain operation succeeds.
 
-- report row
-- job row
-- outbox event
-- report-job attachment
-
-This is the core atomicity guarantee of the submission path.
-
----
-
-### 6.2 Worker Execution Transaction
+### 5.2 Worker Execution Transaction
 
 ```python
 with UnitOfWork(db) as uow:
-    begin = pipeline.begin_attempt(...)
-    executor(JobContext(...), payload)
-    _safe_finalize_attempt(...)
+    begin = pipeline.begin_attempt(uow.session, ...)
+    executor(JobContext(uow, ...), payload)   # domain work here
+    # finalize_attempt in finally, inside begin_nested() savepoint
+# Commits on clean exit
 ```
 
-Domain updates performed by the executor commit in the **same outer transaction** as job state updates. This means domain outcome and job outcome stay consistent.
+The executor runs inside the worker's Unit of Work. Domain state updates (e.g., `complete_report`) are committed in the same transaction as the job and attempt status finalization. This is the key consistency guarantee: domain outcome and job infrastructure state are always in sync.
 
-`_safe_finalize_attempt()` wraps `pipeline.finalize_attempt()` in `db.begin_nested()`, so finalization uses a savepoint.
+The `begin_nested()` in `_safe_finalize_attempt` creates a savepoint. If finalization fails, the savepoint is rolled back but the outer transaction continues — preventing a finalization failure from losing the executor's domain work. The sweeper will subsequently recover any job left in RUNNING state.
 
-If finalization fails:
+**Edge case — unclassified exceptions**: For exceptions that are neither `RetryableJobError`, `NonRetryableJobError`, nor `ExecutorNotRegistered`, `_run_executor` re-raises after capturing the traceback. The outer `UnitOfWork.__exit__` calls `rollback()`, which undoes both the `begin_attempt` mutations and the `finalize_attempt` savepoint work. The job returns to its pre-attempt state (PENDING) with no attempt record.
 
-- an exception is logged with event `job_finalize_failed`
-- the outer transaction continues
-- the job may remain in `RUNNING`
-- the sweeper can recover it later
+With `task_acks_on_failure_or_timeout=False` now configured, Celery will **nack** the task message on unhandled failure rather than acknowledging it. The broker requeues the task, which will re-enter `begin_attempt` and run again. Combined with the idempotent `begin_attempt` design, this means unclassified exceptions behave as implicit retries from the broker's perspective rather than silently losing the task. Executor authors should still classify errors explicitly via `RetryableJobError`/`NonRetryableJobError` — the nack behaviour is a safety net, not the intended path.
 
----
+### 5.3 Outbox Per-Event Transaction
 
-### 6.3 Outbox Event Transaction
-
-Each outbox event is processed in its own session and committed independently.
-
-This keeps the publisher durable: one failing event does not poison the entire batch.
+Each outbox event is processed in its own session and committed independently. A failure on event N does not affect the published status of events 1..N-1. The Phase 1 batch ID collection is also committed immediately, releasing SKIP LOCKED row locks so the IDs can be re-claimed if processing fails mid-batch.
 
 ---
 
-## 7. Error Handling Model
+## 6. Async Processing Model
 
-### 7.1 Domain Exceptions -> API Responses
+The system uses **Celery with Redis** as the task broker and result backend.
 
-Service-layer exceptions such as:
+**Producer**: FastAPI API processes write to PostgreSQL. Celery Beat reads pending outbox events and dispatches task messages to Redis.
 
-- `ReportNotFound`
-- `InvalidReportState`
-- `JobNotFound`
-- `InvalidJobState`
-- `IdempotencyKeyConflict`
+**Consumer**: Celery workers pull `process_job` tasks from Redis queues and execute them synchronously.
 
-are mapped to HTTP responses by exception handlers in `src/api/v1/*/exceptions.py`.
+**Coordination**: PostgreSQL row-level locks (`SELECT FOR UPDATE`) are used for execution coordination — not Redis locks. This is a deliberate and correct choice:
 
----
+- Database locks are transactional: held for the duration of the DB transaction, automatically released on commit, rollback, or worker crash.
+- Redis locks require explicit TTL management and heartbeat renewal.
+- Since job state lives in PostgreSQL, keeping all coordination in PostgreSQL eliminates a distributed systems coordination problem.
 
-### 7.2 Executor Errors -> Pipeline Decisions
+The pipeline uses **synchronous Python** throughout (no `asyncio` in workers). Async Python would add complexity without meaningful benefit: jobs are I/O-bound (database operations), and concurrency is achieved at the process level (multiple Celery workers), not at the coroutine level. FastAPI's `run_in_threadpool` is used only for the DB readiness probe and the metrics endpoint.
 
-Executors communicate failure intent through typed exceptions.
+**Maximum dispatch latency**: ~2 seconds (one Beat tick) from job submission to task queuing.
 
-| Exception | Meaning | Pipeline action |
-|-----------|---------|-----------------|
-| `RetryableJobError` | transient failure | move job back to `PENDING`, schedule retry |
-| `NonRetryableJobError` | permanent failure | move to `DEAD` |
-| `ExecutorNotRegistered` | configuration/runtime mismatch | move to `DEAD` |
-| any other `Exception` | unexpected bug | re-raise to Celery |
-
-For retryable failures, retry scheduling uses exponential backoff with full jitter.
-
-For unexpected exceptions, the task is re-raised. Combined with:
-
-- `task_acks_late=True`
-- `task_acks_on_failure_or_timeout=False`
-
-Celery can requeue the task instead of silently consuming it.
+**Maximum recovery latency for stuck jobs**: ~60 seconds (one sweeper tick) plus one outbox publish cycle.
 
 ---
+
+## 7. Error Handling Strategy
+
+### 7.1 Domain Exceptions → API Responses
+
+Domain exceptions (`JobNotFound`, `InvalidJobState`, `IdempotencyKeyConflict`, `ReportNotFound`) are raised in service layers and caught by FastAPI exception handlers registered at startup. The handlers live in `api/v1/{domain}/exceptions.py` and are auto-discovered by `exception_registry.py`. This keeps HTTP concerns out of business logic.
+
+### 7.2 Executor Errors → Pipeline Signals
+
+Executors communicate intent through exception type:
+
+| Exception | Classification | Pipeline Action |
+|-----------|---------------|-----------------|
+| `RetryableJobError` | Transient failure | Retry with backoff; DLQ after max_retries |
+| `NonRetryableJobError` | Permanent failure | DLQ immediately |
+| `ExecutorNotRegistered` | Configuration error | DLQ immediately |
+| Any other `Exception` | Unexpected bug | Re-raise → broker nacks → task requeued (see §5.2) |
+
+`_classify_execution_error` in `runner.py` maps these exceptions to `_ErrorClassification` values, which drive the `finalize_attempt` call and the retry decision. This is not a general-purpose exception handler — it is a typed dispatch table.
 
 ### 7.3 Outbox Publish Errors
 
-Outbox publish failures are handled in `src/outbox/service.py`.
+Outbox publish failures are retried with exponential backoff with full jitter (base 30s, cap 600s, max 5 retries). The retry count and `next_attempt_at` are persisted on the `OutboxEvent` row. After exhausting retries, the event is marked `FAILED`. There is no automatic recovery from a `FAILED` outbox event — this requires manual intervention.
 
-Behavior:
+`is_terminal_publish_error` in `outbox/utils.py` determines which exceptions should skip retries entirely. Currently, only `UnsupportedOutboxEventType` is terminal.
 
-- unsupported event types are marked `FAILED`
-- transient failures are rescheduled with persisted `retry_count` and `next_attempt_at`
-- after retry exhaustion, the event is marked `FAILED`
+### 7.4 Attempt Finalization Errors
 
-There is **no automatic recovery path** for `FAILED` outbox events in the current implementation.
+`_safe_finalize_attempt` in `runner.py` wraps `finalize_attempt` in a savepoint and catches all exceptions. If finalization fails:
+- The job remains in RUNNING state.
+- The sweeper recovers it within ~60 seconds.
+- The failure is emitted as a structured `JobEvent.FINALIZE_FAILED` log entry (using `build_log_extra`) — not a plain `logger.exception` call — so it can be queried and alerted on in log aggregation systems like any other pipeline event.
+- The failure does not propagate (the executor's work is preserved if its domain updates committed before the exception).
 
 ---
 
 ## 8. Consistency Strategy
 
-The system uses **strong consistency inside a transaction boundary** and **eventual consistency across asynchronous boundaries**.
+The system targets **strong consistency within a single transaction boundary** and **eventual consistency across asynchronous hops**.
 
-### 8.1 Strongly Consistent
+### Strongly Consistent
 
-| Data relationship | Why |
-|-------------------|-----|
-| report row + job row + outbox event | written in one API transaction |
-| job snapshot + attempt row finalization | written in one worker transaction |
-| domain update + final job outcome | executor runs inside the active UnitOfWork |
+| What | How |
+|------|-----|
+| Job row + outbox event | Written in the same API request transaction |
+| Job status + attempt status | Finalized in the same worker transaction |
+| Domain state + job outcome | Executor domain work inside the same worker UoW |
+| Idempotent job submission | Partial unique index + `begin_nested` + `IntegrityError` fallback |
+| Idempotent attempt creation | `UNIQUE(job_id, attempt_no)` database constraint |
 
----
+### Eventually Consistent
 
-### 8.2 Eventually Consistent
+| What | Latency | Mechanism |
+|------|---------|-----------|
+| Outbox event → Celery dispatch | ≤2s | Beat publishes every 2s |
+| Stuck RUNNING → recovery | ≤60s | Sweeper runs every 60s |
+| Job completion → client knowledge | Poll-based | No push mechanism |
 
-| Boundary | Mechanism |
-|----------|-----------|
-| outbox event -> broker dispatch | periodic publisher |
-| retry scheduling -> later execution | Celery retry |
-| stuck running job -> recovery | periodic sweeper |
-| job completion -> client awareness | polling via API |
+### Idempotency Implementation
 
----
+**Job submission**: `UNIQUE(idempotency_key) WHERE NOT NULL` partial index on `jobs`. Application code uses a fast-path non-locking read, followed by an insert in `begin_nested()`, followed by an `IntegrityError` fallback read. Semantic validation (`_validate_idempotent_match`) ensures the same key cannot be reused with different `job_type` or `payload`. This two-layer approach is correct for concurrent environments: the fast path avoids the overhead for the common case, and the IntegrityError path handles the race condition.
 
-### 8.3 Idempotency and Duplicate Suppression
+**Attempt creation**: `UNIQUE(job_id, attempt_no)` on `job_attempts`. A concurrent duplicate invocation gets `IntegrityError` at `db.flush()` in `begin_attempt` → returns `AttemptResult(should_run=False, "duplicate")`. The task exits cleanly without executing the executor.
 
-The project uses multiple layers of deduplication:
-
-#### Submission idempotency
-
-- partial unique index on `jobs.idempotency_key`
-- fast-path read by key
-- `begin_nested()` insert
-- `IntegrityError` fallback read
-- semantic validation: same key must match same `job_type` and `payload`
-
-#### Report creation idempotency
-
-- partial unique index on `reports.idempotency_key`
-- same optimistic insert + fallback pattern
-
-#### Attempt deduplication
-
-- `UNIQUE(job_id, attempt_no)` on `job_attempts`
-- if duplicate attempt insert fails, execution is skipped safely
-
-#### Publisher concurrency control
-
-- `FOR UPDATE SKIP LOCKED` for pending outbox batches
-- per-event `FOR UPDATE` before publish
-- status re-check before changing state
+**Outbox claiming**: `FOR UPDATE SKIP LOCKED` in Phase 1 + status re-check in Phase 2. Two publishers cannot process the same event concurrently.
 
 ---
 
 ## 9. Extensibility Points
 
-### 9.1 Adding a New Job Type
+### 9.1 New Job Types
 
-A domain adds an executor:
+Register a new executor in any domain module:
 
 ```python
-@register("my_domain.some_job")
-def some_job(ctx: JobContext, payload: dict) -> ExecutionResult:
+@register("new_domain.do_work")
+def do_work(ctx: JobContext, payload: dict) -> ExecutionResult:
     ...
 ```
 
-Then the executor module is included in `JOB_EXECUTORS`.
+Add the module to `JOB_EXECUTORS`. No changes to the pipeline required. The registry lookup (`get_executor(job.job_type)`) will find it at runtime.
 
-No pipeline changes are required.
+### 9.2 New Outbox Event Types
 
----
+The `_publish_single_event` function in `outbox/service.py` dispatches on `event.event_type`. Adding a new event type requires:
 
-### 9.2 Adding a New Outbox Event Type
+1. A new constant in `outbox/events.py`
+2. A new dispatch handler called from `_publish_single_event`
+3. An update to `is_terminal_publish_error` if the new type has different terminal error semantics
 
-To support another outbox event type:
+### 9.3 New Domains
 
-1. define a new event type constant
-2. add publish handling in `src/outbox/service.py`
-3. update terminal/non-terminal error behavior if needed
+New domains follow the reports domain pattern:
 
----
+1. `src/apps/{domain}/` — service, repository, models, executors, exceptions
+2. Executor module registered in `JOB_EXECUTORS`
+3. API routes in `src/api/v1/{domain}/` — router, schemas, exceptions
+4. Router included in `src/api/v1/router.py`
 
-### 9.3 Swapping the Dispatcher
+The pipeline, outbox, and database infrastructure require no modification.
 
-`src/jobs/dispatch.py` defines a small dispatch interface.
+### 9.4 Swapping the Job Dispatcher
 
-The current implementations are:
-
-- `CeleryJobDispatcher`
-- `NoopJobDispatcher`
-
-This makes broker dispatch replaceable without changing the pipeline or domain services.
+The `JobDispatcher` Protocol in `dispatch.py` defines a single method `dispatch(job_id, request_id)`. Replacing Celery with another broker (e.g., AWS SQS, RabbitMQ) requires only a new `JobDispatcher` implementation and an update to `_build_dispatcher`. The pipeline, outbox, and domain code are unaffected.
 
 ---
 
-## 10. Observability and Operational Model
+## 10. Observability Model
 
 ### 10.1 Structured Logging
 
-The pipeline and publisher emit structured logs using `build_log_extra()`.
+All pipeline and outbox events are logged using `build_log_extra()`, which produces a dictionary of non-null fields suitable for log aggregation systems (ELK, Loki, Datadog). Every relevant log entry includes:
 
-Common fields include:
+- `component` — e.g., `"jobs.worker"`, `"outbox.publisher"`
+- `event` — a `JobEvent` or outbox event string constant
+- `job_id`, `attempt_no` — when available
+- `request_id` — propagated from the original HTTP request through the full async chain
+- `detail` — error message or contextual information
 
-- `component`
-- `event`
-- `job_id`
-- `attempt_no`
-- `request_id`
-- `detail`
+Pipeline log events emitted via `build_log_extra()`:
 
-The `request_id` propagation chain is:
+| Event | Level | When |
+|-------|-------|------|
+| `job_attempt_begin` | INFO | Task starts executing |
+| `job_attempt_noop` | INFO | Job already terminal or duplicate invocation |
+| `job_attempt_succeeded` | INFO | Executor completed successfully |
+| `job_retry_needed` | WARNING | Retryable error, retry pending |
+| `job_retry_scheduled` | WARNING | Retry countdown dispatched |
+| `job_moved_to_dlq` | ERROR | Job moved to dead state |
+| `job_finalize_failed` | ERROR | Finalization savepoint failed — job may be stuck in RUNNING until sweeper recovers it |
+| `outbox_event_claimed` | INFO | Outbox event picked up for publishing |
+| `outbox_event_published` | INFO | Dispatch successful |
+| `outbox_event_retry_scheduled` | WARNING | Publish failed, retry scheduled |
+| `outbox_event_failed` | ERROR | Publish exhausted retries or unsupported type |
 
-```text
-HTTP header
-  -> RequestIdMiddleware
-  -> submit_job(... request_id=...)
-  -> outbox payload
-  -> Celery task headers
-  -> runner._resolve_celery_context()
-  -> worker logs
+The `request_id` propagation path:
+```
+HTTP X-Request-Id header
+  → stored in outbox event payload (via submit_job)
+  → forwarded as Celery task header (via CeleryJobDispatcher)
+  → extracted from task.request.headers (via _resolve_celery_context)
+  → included in all worker log entries
 ```
 
-This provides end-to-end correlation without distributed tracing.
-
----
+This allows a single client request to be traced through its async execution chain in any log aggregation system without distributed tracing infrastructure.
 
 ### 10.2 Prometheus Metrics
 
-The application exposes metrics at `GET /metrics`.
+Three metrics are emitted and exposed at `/metrics`:
 
-Defined metrics:
+| Metric | Type | Labels | Emitted In |
+|--------|------|--------|-----------|
+| `job_attempts_total` | Counter | `job_type`, `status` | `runner._run_executor` finally block |
+| `job_duration_seconds` | Histogram | `job_type` | `runner._run_executor` finally block |
+| `outbox_events_total` | Counter | `outcome` | `outbox.service` publish/fail/retry paths |
 
-| Metric | Type | Labels |
-|--------|------|--------|
-| `job_attempts_total` | Counter | `job_type`, `status` |
-| `job_duration_seconds` | Histogram | `job_type` |
-| `outbox_events_total` | Counter | `outcome` |
+Both metrics in `_run_executor` are emitted in the `finally` block, meaning they fire for every attempt outcome including failure — guaranteeing no outcome is silently unobservable.
 
-Emission points:
+### 10.3 Health and Readiness Probes
 
-- `runner._run_executor()` updates job attempt and duration metrics
-- `outbox.service` updates outbox outcome metrics
+- `GET /healthz` — always returns 200. Liveness probe.
+- `GET /readyz` — checks both the database (`SELECT 1`) and the broker (`PING` via the `redis` client). Returns 503 with a per-component `errors` map if either check fails. Workers that can reach the database but not Redis will correctly report not ready.
 
----
+### 10.4 What Is Currently Missing
 
-### 10.3 Health and Readiness
-
-The application exposes:
-
-- `GET /healthz` -> liveness probe
-- `GET /readyz` -> checks both database and Redis broker connectivity
-
-Readiness returns `503` with an `errors` map if any dependency is unavailable.
+| Gap | Impact | Mitigation |
+|-----|--------|-----------|
+| No DLQ depth gauge | Cannot alert on accumulating dead jobs | Query `jobs` table with `status=dead` for ad hoc monitoring |
+| No outbox backlog gauge | Cannot alert on publish lag | Query `outbox_events` table with `status=pending` |
+| No retry count label on `job_attempts_total` | Cannot distinguish first vs. Nth attempt outcomes | Check structured logs |
+| No distributed tracing (OpenTelemetry) | Cannot visualize latency across API→Beat→Worker | `request_id` propagation provides partial correlation |
 
 ---
 
-### 10.4 Current Gaps
+## 11. Trade-offs and Design Reasoning
 
-The current observability model does **not** include:
+### 11.1 PostgreSQL as Coordination Layer
 
-- OpenTelemetry or distributed tracing
-- explicit DLQ depth metrics
-- explicit outbox backlog metrics
-- alerting hooks for DLQ growth or stuck jobs
+**What it optimizes for**: Correctness and simplicity. Database locks are transactional — they are held for the duration of the DB transaction and automatically released on commit, rollback, or crash. No external lock management required.
 
-These are operational gaps, not correctness gaps.
+**What it sacrifices**: Throughput. A `SELECT FOR UPDATE` on a job row creates a serialization point. For jobs processed by many concurrent workers, this is not a bottleneck because each job is a separate row — workers contend only when targeting the exact same job, which should be rare.
 
----
+**Is it reasonable?** Yes. For a system that already requires PostgreSQL for durable state, using the same database for coordination is strictly simpler than introducing a distributed lock service.
 
-## 11. Trade-offs and Design Choices
+### 11.2 Outbox Over Direct Enqueue
 
-### 11.1 PostgreSQL as the Coordination Layer
+**What it optimizes for**: Reliability. The job row and dispatch event are written atomically. A process crash between submission and enqueue cannot silently lose a job.
 
-The system uses PostgreSQL row locks for coordination instead of Redis locks.
+**What it sacrifices**: Latency (up to 2s), operational complexity (Beat must run), and one additional component to operate.
 
-Benefits:
+**Is it reasonable?** Yes. For a system that already requires Celery Beat for periodic tasks, the marginal cost is low. The reliability guarantee is essential for any production job system.
 
-- transactional correctness
-- automatic lock release on commit/rollback
-- no TTL/heartbeat complexity
+### 11.3 Executor Context Carries Active Transaction
 
-Trade-off:
+**What it optimizes for**: Atomic consistency between domain state and job infrastructure state. A report marked READY and a job marked COMPLETED are always consistent — they commit in the same transaction.
 
-- lock contention is resolved at the database level
-- throughput is bounded by database coordination patterns
+**What it sacrifices**: Transaction duration. Executors can hold open a database transaction for as long as they run, increasing lock hold time and potential for contention on rows accessed by both the executor and concurrent requests.
 
-For this project, this is the right trade-off.
+**Is it reasonable?** Yes, at current scale. For long-running executors that perform many database operations, the risk increases. Executors should be designed to complete quickly; slow operations (e.g., external API calls) should be outside the UoW or designed to fail fast.
 
----
+### 11.4 Optimistic Idempotency (insert-then-fallback)
 
-### 11.2 Transactional Outbox Instead of Direct Enqueue
+**What it optimizes for**: Performance in the common case (no conflict). The fast path requires no lock at all.
 
-The outbox removes the classic failure window:
+**What it sacrifices**: Complexity. The `begin_nested` + `IntegrityError` fallback + semantic validation pattern is not obvious, and the two-layer approach (fast-path read + insert + fallback read) must be correctly maintained.
 
-- DB commit succeeds
-- process crashes before queue enqueue
-- job is lost
+**Is it reasonable?** Yes. The alternative (pessimistic lock-before-read) would require a `SELECT FOR UPDATE` on every submission, even when no conflict exists. For high-submission-rate job systems, optimistic concurrency is the correct default.
 
-The cost is extra moving parts and up to one publisher interval of dispatch latency.
+### 11.5 Full Jitter Exponential Backoff
 
-This trade-off is the main correctness choice of the architecture.
+**What it optimizes for**: Thundering herd avoidance. When many jobs fail simultaneously, full jitter (`random.randint(0, max_delay)`) distributes retry attempts across the full delay window rather than clustering them.
+
+**What it sacrifices**: Predictability. The retry delay is not deterministic. The lower bound of 0 means immediate retries are possible.
+
+**Is it reasonable?** Yes for the job pipeline. The outbox publisher runs independently every 2 seconds regardless; jitter only affects when failed jobs re-enter the queue.
 
 ---
 
-### 11.3 Executor Runs Inside the Active UnitOfWork
+## 12. Database Schema
 
-Running the executor inside the active transaction gives strong consistency between domain state and job state.
-
-Trade-off:
-
-- long-running executors can hold DB transactions open longer
-- executor code must be careful with expensive or slow side effects
-
-This is a deliberate consistency-over-isolation choice.
-
----
-
-### 11.4 Optimistic Idempotency Pattern
-
-The code prefers:
-
-- non-locking fast-path reads
-- insert under `begin_nested()`
-- `IntegrityError` recovery
-
-instead of pessimistic lock-first logic.
-
-This keeps the common path lightweight while still remaining race-safe.
-
----
-
-### 11.5 At-Least-Once Dispatch and Execution
-
-The architecture intentionally accepts at-least-once behavior at async boundaries.
-
-Safety comes from:
-
-- durable submission
-- duplicate suppression at attempt creation
-- idempotent submission semantics
-- explicit job state transitions
-
-This is the right model for the current stack.
-
----
-
-## 12. Database Schema Overview
-
-```text
+```
 jobs
   id                UUID PK
-  job_type          VARCHAR(...) INDEX
-  idempotency_key   VARCHAR(...) UNIQUE PARTIAL INDEX (WHERE NOT NULL)
-  status            ENUM(pending, running, completed, dead) INDEX
-  payload           JSON
-  result            JSON nullable
+  job_type          VARCHAR(64)  INDEX
+  idempotency_key   VARCHAR(128) UNIQUE PARTIAL INDEX (WHERE NOT NULL)
+  status            ENUM(pending, running, completed, dead)  INDEX
+  payload           JSONB
+  result            JSONB nullable
   attempts          INTEGER
   last_error        TEXT nullable
-  created_at
-  updated_at
+  created_at        TIMESTAMPTZ
+  updated_at        TIMESTAMPTZ   ← used by sweeper for stuck-job detection
 
 job_attempts
   id                UUID PK
-  job_id            FK -> jobs.id (ON DELETE CASCADE)
+  job_id            VARCHAR → jobs.id (CASCADE DELETE)  INDEX
   attempt_no        INTEGER
-  status            ENUM(running, succeeded, failed) INDEX
+  status            ENUM(running, succeeded, failed)  INDEX
   error             TEXT nullable
   started_at        TIMESTAMPTZ nullable
   finished_at       TIMESTAMPTZ nullable
-  created_at
-  UNIQUE(job_id, attempt_no)
+  created_at        TIMESTAMPTZ
+  UNIQUE(job_id, attempt_no)           ← concurrency guard for duplicate invocations
 
 outbox_events
   id                UUID PK
-  event_type        VARCHAR(...) INDEX
-  status            ENUM(pending, published, failed) INDEX
-  payload           JSON
+  event_type        VARCHAR  INDEX
+  status            ENUM(pending, published, failed)  INDEX
+  payload           JSONB
   error             TEXT nullable
   retry_count       INTEGER
-  next_attempt_at   TIMESTAMPTZ nullable
+  next_attempt_at   TIMESTAMPTZ nullable  ← enables deferred retry
   published_at      TIMESTAMPTZ nullable
-  created_at
-  updated_at
+  created_at        TIMESTAMPTZ
+  updated_at        TIMESTAMPTZ
 
 reports
   id                UUID PK
-  idempotency_key   VARCHAR(...) UNIQUE PARTIAL INDEX (WHERE NOT NULL)
-  status            ENUM(pending, ready) INDEX
-  job_id            VARCHAR(...) nullable INDEX
-  result            JSON nullable
-  created_at
-  updated_at
+  idempotency_key   VARCHAR(128) UNIQUE PARTIAL INDEX (WHERE NOT NULL)
+  status            ENUM(pending, ready, failed)  INDEX
+  job_id            VARCHAR nullable  INDEX  ← no FK to jobs (intentional loose coupling)
+  result            JSONB nullable
+  created_at        TIMESTAMPTZ
+  updated_at        TIMESTAMPTZ
 ```
 
-Notable choices:
+**Notable design choices**:
 
-- partial unique indexes allow optional idempotency keys
-- `job_attempts` uses `ON DELETE CASCADE`
-- `reports.job_id` is indexed but not a foreign key
-- enums are stored as string values via `enum_value_type()`
-- `jobs.updated_at` is used by the sweeper to detect stuck running jobs
+- **Partial unique index on `idempotency_key WHERE NOT NULL`**: Correctly allows multiple `NULL` keys while enforcing uniqueness for non-null ones. Standard SQL `UNIQUE` on a nullable column would require explicit NULL handling.
+- **CASCADE DELETE on `job_attempts`**: Cleaning up a job cleans all its attempt history. No orphan attempt rows.
+- **No foreign key from `reports.job_id` to `jobs.id`**: Intentional loose coupling between domains. The relationship is maintained at the application layer. This allows reports and jobs to evolve their schemas independently.
+- **Enum stored as string values** (via `enum_value_type()`): Migration-safe and human-readable in the database. Avoids ordinal-based enum migration problems.
+- **`updated_at` on `jobs`**: Serves double duty as the stuck-job detection timestamp. The sweeper queries `updated_at < now - max_execution_seconds` to find jobs that have been in RUNNING state without any update.
 
 ---
+
+## 13. Known Gaps and Future Directions
+
+| Area | Current State | Risk |
+|------|---------------|------|
+| Outbox publisher — single Beat | Cannot horizontally scale Beat | Low: Beat is single-instance by convention |
